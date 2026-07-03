@@ -15,10 +15,9 @@ core
 *.code-workspace
 
 # Vim
-.swp
-.swo
+*.swp
+*.swo
 *.swn
-*~
 
 # GCC/Compiler
 *.o
