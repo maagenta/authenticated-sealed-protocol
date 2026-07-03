@@ -34,6 +34,7 @@ Complete reference for the `proto` library. For the design rationale see
   - [`proto_auth_server`](#proto_auth_server)
 - [Module `serve` — server harness](#module-serve--server-harness)
   - [`proto_serve`](#proto_serve)
+- [Tool `keygen` — generating key files](#tool-keygen--generating-key-files)
 - [Wire protocol appendix](#wire-protocol-appendix)
 - [Recipes](#recipes)
 - [Worked example: complete client](#worked-example-complete-client)
@@ -107,9 +108,10 @@ Notes:
 - The **identity** of a client is `hex(auth_pk)`: 64 lowercase hex chars.
   This is what `proto_auth_server` returns, what `proto_conn_t.identity_hex`
   holds, and what servers should use as the user key in storage.
-- Generate keys with any tool that emits raw libsodium keys base64-encoded on
-  one line (the diary project ships a `keygen` utility that does exactly
-  this: `crypto_sign_keypair` + `crypto_box_keypair`, base64 each secret).
+- Generate the files with the bundled tool — see
+  [Tool `keygen`](#tool-keygen--generating-key-files). Any other tool works
+  too, as long as it emits raw libsodium keys base64-encoded on one line
+  (`crypto_sign_keypair` + `crypto_box_keypair`, base64 each key).
 
 ---
 
@@ -594,6 +596,56 @@ int main(void) {
     return proto_serve(5000, allowed, on_client, "/var/lib/app/data.db");
 }
 ```
+
+---
+
+## Tool `keygen` — generating key files
+
+`keygen/keygen.c` — a standalone CLI tool, **not part of the library
+sources**. It lives in its own subdirectory precisely so that `protocol/*.c`
+globs never pick up its `main()`. It depends only on libsodium and
+`protocol.h` (for the key-size constants), so it builds even where the rest
+of the library isn't compiled.
+
+### Build
+
+```sh
+make -C keygen              # produces keygen/keygen
+make -C keygen arm64        # cross-build (aarch64-linux-gnu-gcc)
+make -C keygen BUILD=/out   # place the binary elsewhere
+```
+
+Or by hand: `cc -O2 -o keygen keygen/keygen.c -lsodium`.
+
+### Run
+
+```sh
+cd ~/my-keys        # keys are written to the current directory
+/path/to/protocol/keygen/keygen
+```
+
+No arguments. It generates one complete identity:
+
+| Step | libsodium call | Files written |
+|---|---|---|
+| Ed25519 authentication keypair | `crypto_sign_keypair` | `auth.key` (secret, 64 B), `auth.pub` (public, 32 B) |
+| X25519 encryption keypair | `crypto_box_keypair` | `enc.key` (secret, 32 B) — the public half is discarded, it is re-derived on load |
+
+Each file is a single line of base64 (standard variant), `chmod 0600`, in
+exactly the format [`proto_load_keys`](#proto_load_keys) and
+[`proto_load_pubkey_hex`](#proto_load_pubkey_hex) parse — the tool is the
+writing half of the key-file contract those functions read.
+
+### Notes
+
+- **Existing files are overwritten without prompting.** Running it twice
+  creates a *new* identity: the server won't recognize you (`FAIL access
+  denied` until it gets the new `auth.pub`), and data sealed to the old
+  `enc.key` becomes permanently unreadable. Back keys up before regenerating.
+- Distribute the files as the [key-file table](#key-files--formats) says:
+  both `.key` files stay with the client; `auth.pub` goes to the server.
+- One run = one identity. For several devices sharing an identity, copy the
+  files; for separate identities, run the tool once per directory.
 
 ---
 

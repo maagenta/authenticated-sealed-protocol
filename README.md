@@ -23,6 +23,7 @@ application defines only its own command verbs (e.g. `POST`, `GET`) on top.
 - Turnkey server harness: `proto_serve()` = bind/listen + fork-per-connection + per-client auth
 - Low-level primitives stay public, so custom accept loops / transports are possible
 - No size ceiling: dynamic line reads and length-based payload APIs
+- Bundled `keygen` tool to provision an identity's key files
 - Zero dependencies beyond **libsodium** and libc; no TLS stack required
 
 ## Requirements
@@ -41,6 +42,29 @@ SRCS    = main.c \
 ```
 
 (Clients don't need `serve.c`; servers need all four.)
+
+## Generating keys
+
+The repo ships `keygen/`, a standalone CLI tool that creates the key files
+every consumer needs. Build it once, run it in the directory where the keys
+should live:
+
+```sh
+make -C keygen                # produces keygen/keygen
+cd ~/my-keys
+/path/to/protocol/keygen/keygen
+```
+
+It writes three files (single-line base64, mode 0600):
+
+- `auth.key` — Ed25519 secret key. Stays on the client. **Keep secret.**
+- `auth.pub` — Ed25519 public key. Give it to the server: it is the allowlist.
+- `enc.key` — X25519 secret key. Stays on the client. **Keep secret** —
+  sealed payloads are unrecoverable without it.
+
+There is no `enc.pub` file: the encryption public key is derived from
+`enc.key` on load and reaches the server through the `REGISTER` step.
+See [docs.md](docs.md#tool-keygen--generating-key-files) for details.
 
 ## Quick start
 
@@ -117,6 +141,7 @@ int main(void) {
 | `crypto.h` / `crypto.c` | Keypairs (`proto_keys_t`), key loading, sealed-box encrypt/decrypt, challenge sign/verify |
 | `auth.h` / `auth.c` | Client session (`proto_conn_t`, `proto_connect`, `proto_close`) and the handshake primitives for both sides |
 | `serve.h` / `serve.c` | Server harness: `proto_serve()` accept/fork loop with built-in authentication |
+| `keygen/` | Standalone CLI tool that generates the key files (`auth.key`, `auth.pub`, `enc.key`) — not part of the library sources |
 
 ## Documentation
 

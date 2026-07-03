@@ -50,9 +50,9 @@ exists, so you can replace the harness without touching the handshake.
 
 ## What each file contains
 
-Nine files, four modules plus one constants header. Full signatures and
-per-function semantics are in [docs.md](docs.md); this is the map of what
-lives where and why.
+Nine files — four modules plus one constants header — and one tool
+directory (`keygen/`). Full signatures and per-function semantics are in
+[docs.md](docs.md); this is the map of what lives where and why.
 
 ### `protocol.h` — the contract
 
@@ -135,6 +135,29 @@ every server's `main` collapses to "load allowlist, call `proto_serve`".
 Applications with different process models skip this file entirely and use
 `proto_auth_server` in their own loop.
 
+### `keygen/` — key generation tool
+
+Not a module: a standalone CLI program (`keygen/keygen.c` + its own
+Makefile) that provisions an identity by writing the three key files —
+`auth.key`, `auth.pub`, `enc.key` — into the current directory.
+
+It lives in the library repo because the key-file format is part of the
+library's contract: `crypto.c` owns the *reading* side (`proto_load_keys`,
+`proto_load_pubkey_hex`), so the *writing* side must stay in lockstep with
+it — same libsodium key layouts, same single-line base64 encoding. Keeping
+both halves in one repo means a format change can never leave a stale
+generator behind in some consuming project.
+
+It lives in a **subdirectory** (rather than next to `wire.c` and friends)
+because it has a `main()`: consumers compile `protocol/*.c` straight into
+their binaries, and a top-level `keygen.c` would collide with the
+application's own `main`. The subfolder keeps the tool out of the library
+file set while shipping with it.
+
+Consumers either invoke the tool directly or hook it into their build (the
+diary's root Makefile runs `make -C protocol/keygen` alongside its own
+targets). Details and caveats: [docs.md](docs.md#tool-keygen--generating-key-files).
+
 ## The two keypairs
 
 Each identity consists of two keypairs with different jobs:
@@ -143,6 +166,9 @@ Each identity consists of two keypairs with different jobs:
 |---|---|---|---|
 | Authentication | Ed25519 (signing) | `auth.key` (secret, 64 B), `auth.pub` (public, 32 B) | Prove *who you are*. The hex of the public key **is** your identity/username. |
 | Encryption | X25519 (box) | `enc.key` (secret, 32 B; public key derived) | Protect *what you store*. Payloads are sealed to this public key; only the secret key opens them. |
+
+Both keypairs of an identity are created in one run of the bundled
+[`keygen` tool](#keygen--key-generation-tool).
 
 Why two? Signing keys can't encrypt and encryption keys can't sign, and
 keeping them separate means the server can hold your **encryption public
@@ -368,6 +394,7 @@ project demands it.
 
 | Concern | Library | Your app |
 |---|---|---|
+| Key file generation | ✔ (`keygen/` tool) | run it once per identity |
 | TCP connect / accept / fork / reaping | ✔ (`proto_connect`, `proto_serve`) | — |
 | Challenge–response authentication | ✔ | — |
 | First-connect registration (client side) | ✔ (inside `proto_connect`) | — |
