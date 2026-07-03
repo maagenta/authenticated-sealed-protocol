@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+core
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Vim
+.swp
+.swo
+*.swn
+*~
+
+# GCC/Compiler
+*.o
+*.a
+*.so
+*.exe
+*.out
+*.gch
