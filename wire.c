@@ -14,8 +14,9 @@ int proto_send_line(int fd, const char *line) {
 }
 
 int proto_recv_line(int fd, char *buf, size_t bufsz) {
+    if (bufsz == 0) return -1;   /* no room even for the terminator */
     size_t i = 0;
-    while (i < bufsz - 1) {
+    while (i + 1 < bufsz) {      /* leave room for '\0'; never underflows */
         char c;
         if (read(fd, &c, 1) <= 0) return -1;
         if (c == '\n') break;

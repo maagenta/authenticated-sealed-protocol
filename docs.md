@@ -236,7 +236,7 @@ NUL-terminated.
 |---|---|
 | `fd` | connected socket |
 | `buf` | caller buffer |
-| `bufsz` | its size (must be ≥ 1) |
+| `bufsz` | its size; must be ≥ 1, and `0` is rejected with `-1` |
 
 **Returns** the line length (≥ 0), or `-1` on error/EOF.
 
