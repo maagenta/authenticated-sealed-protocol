@@ -97,6 +97,13 @@ void proto_close(proto_conn_t *conn) {
 char *proto_auth_server(int fd, const char *allowed_hex) {
     char line[MAX_LINE];
 
+    /* Without a well-formed allowlist there is nobody to compare against, so
+     * no peer could ever authenticate. Say so before spending a handshake. */
+    if (!allowed_hex || strlen(allowed_hex) != AUTH_PK_LEN * 2) {
+        proto_send_line(fd, "FAIL internal error");
+        return NULL;
+    }
+
     if (proto_recv_line(fd, line, sizeof(line)) < 0) return NULL;
     if (strcmp(line, "HELLO") != 0) {
         proto_send_line(fd, "FAIL expected HELLO"); return NULL;

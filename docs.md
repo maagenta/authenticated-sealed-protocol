@@ -601,7 +601,7 @@ client's signature, and compares the client's identity against
 | Param | Description |
 |---|---|
 | `fd` | freshly accepted socket |
-| `allowed_hex` | the one authorized identity — 64 hex chars, from [`proto_load_pubkey_hex`](#proto_load_pubkey_hex) |
+| `allowed_hex` | the one authorized identity — 64 hex chars, from [`proto_load_pubkey_hex`](#proto_load_pubkey_hex). `NULL` is rejected with `FAIL internal error` before the handshake starts |
 
 **Returns** the authenticated identity hex (heap; caller **frees**), or
 `NULL` on failure. On every failure path a descriptive `FAIL <reason>` line
@@ -643,7 +643,9 @@ The turnkey server. In one call:
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
 
 **Returns** never on success (blocks forever); `-1` on fatal setup errors
-(libsodium, socket, bind, listen — e.g. port already in use).
+(a `NULL` `allowed_hex`, libsodium, socket, bind, listen — e.g. port already
+in use). The allowlist is checked first, before the port is bound, so a
+misconfigured server fails at startup instead of rejecting every connection.
 
 **When not to use it:** threads instead of forks, event loops, several
 authorized keys, pre-auth connection logging, or non-TCP transports — write

@@ -17,6 +17,11 @@ static void reap_children(int sig) {
 
 int proto_serve(int port, const char *allowed_hex,
                 proto_handler_fn handler, void *ctx) {
+    /* A server with no allowlist, a malformed one, or no handler can never
+     * serve anyone: refuse to start rather than bind a port and fail every
+     * connection. */
+    if (!allowed_hex || strlen(allowed_hex) != AUTH_PK_LEN * 2) return -1;
+    if (!handler) return -1;
     if (proto_init() != 0) return -1;
 
     signal(SIGPIPE, SIG_IGN);
