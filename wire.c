@@ -2,6 +2,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 
 int proto_send_line(int fd, const char *line) {
     size_t len = strlen(line);
@@ -50,4 +53,30 @@ int proto_send_prefixed(int fd, const char *prefix,
     return (write(fd, prefix, plen) == (ssize_t)plen &&
             write(fd, body, body_len) == (ssize_t)body_len &&
             write(fd, "\n", 1) == 1) ? 0 : -1;
+}
+
+int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {
+    int on = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on) != 0)
+        return -1;
+
+    /* Systems spell the idle knob differently; the other two agree. Test for
+     * the constant rather than the platform: Linux, FreeBSD and NetBSD have
+     * TCP_KEEPIDLE, macOS has TCP_KEEPALIVE. */
+#ifdef TCP_KEEPIDLE
+    const int idle_opt = TCP_KEEPIDLE;
+#else
+    const int idle_opt = TCP_KEEPALIVE;
+#endif
+
+    /* Timing is best-effort: a rejected knob leaves the connection probing at
+     * the system default rather than not probing at all. */
+    int rc = 0;
+    if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, idle_opt,
+                                 &idle_s, sizeof idle_s) != 0) rc = -1;
+    if (intvl_s > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL,
+                                  &intvl_s, sizeof intvl_s) != 0) rc = -1;
+    if (count > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,
+                                &count, sizeof count) != 0) rc = -1;
+    return rc;
 }

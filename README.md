@@ -23,6 +23,7 @@ application defines only its own command verbs (e.g. `POST`, `GET`) on top.
 - Turnkey server harness: `proto_serve()` = bind/listen + fork-per-connection + per-client auth
 - Low-level primitives stay public, so custom accept loops / transports are possible
 - No size ceiling: dynamic line reads and length-based payload APIs
+- Optional TCP keepalive per connection (`proto_keepalive`), off unless you ask for it
 - Bundled `keygen` tool to provision an identity's key files
 - Zero dependencies beyond **libsodium** and libc; no TLS stack required
 
@@ -137,7 +138,7 @@ int main(void) {
 | File | Purpose |
 |---|---|
 | `protocol.h` | Shared constants (key sizes, `MAX_LINE`, `CHALLENGE_LEN`) and the wire-format spec |
-| `wire.h` / `wire.c` | Line framing: send/receive `\n`-terminated lines, fixed or dynamic buffers |
+| `wire.h` / `wire.c` | Line framing: send/receive `\n`-terminated lines, fixed or dynamic buffers; optional keepalive |
 | `crypto.h` / `crypto.c` | Keypairs (`proto_keys_t`), key loading, sealed-box encrypt/decrypt, challenge sign/verify |
 | `auth.h` / `auth.c` | Client session (`proto_conn_t`, `proto_connect`, `proto_close`) and the handshake primitives for both sides |
 | `serve.h` / `serve.c` | Server harness: `proto_serve()` accept/fork loop with built-in authentication |
@@ -147,3 +148,4 @@ int main(void) {
 
 - **[architecture.md](architecture.md)** — design: layers, keypairs, handshake, trust model, what the library owns vs what your app owns
 - **[docs.md](docs.md)** — complete API reference with examples, recipes, wire-protocol appendix, and troubleshooting
+- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — what changed in each version and why, newest first

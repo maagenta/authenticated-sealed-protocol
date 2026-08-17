@@ -70,7 +70,8 @@ each consuming app.
 
 ### `wire.h` / `wire.c` — framing
 
-The lowest layer: how bytes become messages. Four functions, no crypto, no
+The lowest layer: how bytes become messages, and how long a connection may
+sit idle before the kernel checks on it. Five functions, no crypto, no
 protocol knowledge, dependencies on libc only:
 
 | Function | Role |
@@ -79,6 +80,13 @@ protocol knowledge, dependencies on libc only:
 | `proto_recv_line` | read one line into a fixed buffer (short control lines) |
 | `proto_recv_line_dyn` | read one line of unbounded size onto the heap (payload lines) |
 | `proto_send_prefixed` | write `<prefix><body>\n` without assembling a buffer (large payloads) |
+| `proto_keepalive` | enable keepalive probing on a connection and set its timing |
+
+The last one is a socket option rather than framing, and lives here because
+`wire` is the lowest layer both sides link: putting it in `serve` would make
+a client pull in the server's accept loop to tune its own socket. It absorbs
+the single platform difference — the idle knob is `TCP_KEEPIDLE` on Linux and
+`TCP_KEEPALIVE` on macOS — so no consumer repeats that `#ifdef`.
 
 If the framing ever changed (e.g. a binary variant), this is the only module
 that would be replaced.
@@ -129,6 +137,19 @@ function and one type:
   process).
 - **`proto_serve`** — bind/listen, `SIGPIPE`/`SIGCHLD` handling, then
   accept → fork → `proto_auth_server` → handler, forever.
+
+Socket housekeeping lives here because this module owns these sockets, but it
+is deliberately minimal: `SO_REUSEADDR` on the listener, and nothing on the
+accepted connections. Keepalive is not set — a connection behaves as it did
+in v1.0 until the application asks for probing with `proto_keepalive`, on
+either end.
+
+The cost is a window this module cannot delegate: `proto_serve` accepts,
+forks and runs the handshake before the handler receives the fd, so a peer
+that disappears mid-handshake leaves that child blocked in `read()` with no
+application code yet running to prevent it. Applications that need the
+handshake window covered run their own accept loop around
+`proto_auth_server` and enable probing on the socket before authenticating.
 
 It contains no application logic and no storage; it exists purely so that
 every server's `main` collapses to "load allowlist, call `proto_serve`".
@@ -354,9 +375,10 @@ Text framing was chosen anyway, for five reasons:
    protocol needs a custom dissector or hexdump archaeology every time.
 
 2. **Implementation simplicity — which is correctness.** The entire framing
-   layer (`wire.c`) is ~60 lines: read until `\n`. Length-prefixed framing
-   needs endianness conventions, a message-type registry, partial reads of
-   the header itself, sanity caps on the declared length (a malicious 4 GB
+   layer (`wire.c`) is ~85 lines: read until `\n`, plus one small
+   socket-option helper. Length-prefixed framing needs endianness
+   conventions, a message-type registry, partial reads of the header itself,
+   sanity caps on the declared length (a malicious 4 GB
    length field is a classic DoS), and versioning of the frame format. Each
    is a place to write a bug; for a security-sensitive library, less parsing
    surface is a feature.

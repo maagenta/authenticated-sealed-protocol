@@ -18,6 +18,7 @@ Complete reference for the `proto` library. For the design rationale see
   - [`proto_recv_line`](#proto_recv_line)
   - [`proto_recv_line_dyn`](#proto_recv_line_dyn)
   - [`proto_send_prefixed`](#proto_send_prefixed)
+  - [`proto_keepalive`](#proto_keepalive)
 - [Module `crypto` — keys and encryption](#module-crypto--keys-and-encryption)
   - [`proto_init`](#proto_init)
   - [`proto_load_keys`](#proto_load_keys)
@@ -296,6 +297,66 @@ char *sealed = proto_seal_new(data, data_len, conn.keys.enc_pk);
 proto_send_prefixed(conn.fd, "PUT ", sealed, strlen(sealed));
 free(sealed);
 ```
+
+---
+
+### `proto_keepalive`
+
+```c
+int proto_keepalive(int fd, int idle_s, int intvl_s, int count);
+```
+
+Ask the kernel to probe `fd` once it goes idle, so a peer that vanishes
+without closing eventually fails the socket instead of leaving a `read()`
+blocked forever. Nothing in the library calls this for you: a connection has
+no keepalive until you enable it, on either end.
+
+**Recommended on servers.** A forking server has the most to lose: every
+client that vanishes without closing leaves a child blocked in `read()`
+forever, holding a socket and whatever per-connection state you keep, and
+those accumulate — one immortal process per lost peer. A client can bound its
+own waits and exit; a server never knows which peer will disappear. Enable it
+in your handler unless you have a specific reason not to.
+
+| Param | Description |
+|---|---|
+| `fd` | a connected socket — `conn.fd` on the client, the handler's `fd` on the server |
+| `idle_s` | seconds of silence before the first probe (`<= 0` = system default, ~7200) |
+| `intvl_s` | seconds between probes once one goes unanswered (`<= 0` = system default, 75) |
+| `count` | unanswered probes before the connection is declared dead (`<= 0` = system default, 8–9) |
+
+Worst-case detection is `idle_s + intvl_s * count`; with every knob left at
+its default, about two hours. When it fires, the blocked `read()` returns -1
+with `errno == ETIMEDOUT`, so existing teardown paths run unchanged. A peer
+whose host is alive but whose process died answers `RST` instead, and the
+connection fails immediately without waiting for `count` probes.
+
+**Returns** `0`; `-1` if the socket rejected an option, in which case earlier
+knobs in the call may already have been applied.
+
+**Not a read timeout.** This is a backstop against blocking forever, not a way
+to give up promptly — it says nothing about how long *you* wait for a reply.
+Reads stay plain and blocking: no `SO_RCVTIMEO`, no `errno` inspection, no
+partial-line hazard.
+
+```c
+/* client — this connection will sit idle, so let the kernel watch it */
+proto_connect(&conn, host, port);
+proto_keepalive(conn.fd, 60, 10, 3);        /* dead peer noticed in ~90 s */
+
+/* server — same call, on the handler's fd */
+static void handler(int fd, const char *identity_hex, void *ctx) {
+    proto_keepalive(fd, 0, 0, 0);           /* system defaults */
+    /* ... */
+}
+```
+
+**Pitfall:** `proto_serve` authenticates in a forked child *before* calling
+your handler, so enabling probing there does not cover the handshake — a peer
+that vanishes mid-`HELLO` still hangs that child. Applications that need that
+window covered run their own accept loop around
+[`proto_auth_server`](#proto_auth_server) and call this on the freshly
+accepted socket.
 
 ---
 
