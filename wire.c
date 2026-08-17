@@ -8,22 +8,31 @@
 
 int proto_send_line(int fd, const char *line) {
     size_t len = strlen(line);
-    if (write(fd, line, len) != (ssize_t)len) return -1;
-    if (write(fd, "\n", 1) != 1) return -1;
-    return 0;
+    if (write(fd, line, len) != (ssize_t)len) return PROTO_E_WRITE;
+    if (write(fd, "\n", 1) != 1) return PROTO_E_WRITE;
+    return PROTO_OK;
 }
 
 int proto_recv_line(int fd, char *buf, size_t bufsz) {
-    if (bufsz == 0) return -1;   /* no room even for the terminator */
+    if (bufsz == 0) return PROTO_E_PARAM;   /* no room even for the terminator */
     size_t i = 0;
+    int terminated = 0;
     while (i + 1 < bufsz) {      /* leave room for '\0'; never underflows */
         char c;
-        if (read(fd, &c, 1) <= 0) return -1;
-        if (c == '\n') break;
+        ssize_t n = read(fd, &c, 1);
+        /* buf is NUL-terminated even on the error paths, so a caller that
+         * logs it after a failure reads a short string, not stale stack. */
+        if (n == 0) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
+        if (n <  0) { buf[i] = '\0'; return PROTO_E_READ; }
+        if (c == '\n') { terminated = 1; break; }
         if (c == '\r') continue;
         buf[i++] = c;
     }
     buf[i] = '\0';
+    /* Ran out of room before the newline: the rest of the line is still in
+     * the socket and would surface as a bogus next line. Say so instead of
+     * returning a length that looks like a complete read. */
+    if (!terminated) return PROTO_E_LINE_TOO_LONG;
     return (int)i;
 }
 
@@ -53,13 +62,13 @@ int proto_send_prefixed(int fd, const char *prefix,
     size_t plen = strlen(prefix);
     return (write(fd, prefix, plen) == (ssize_t)plen &&
             write(fd, body, body_len) == (ssize_t)body_len &&
-            write(fd, "\n", 1) == 1) ? 0 : -1;
+            write(fd, "\n", 1) == 1) ? PROTO_OK : PROTO_E_WRITE;
 }
 
 int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {
     int on = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on) != 0)
-        return -1;
+        return PROTO_E_KEEPALIVE;
 
     /* Systems spell the idle knob differently; the other two agree. Test for
      * the constant rather than the platform: Linux, FreeBSD and NetBSD have
@@ -72,12 +81,12 @@ int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {
 
     /* Timing is best-effort: a rejected knob leaves the connection probing at
      * the system default rather than not probing at all. */
-    int rc = 0;
+    int rc = PROTO_OK;
     if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, idle_opt,
-                                 &idle_s, sizeof idle_s) != 0) rc = -1;
+                                 &idle_s, sizeof idle_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
     if (intvl_s > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL,
-                                  &intvl_s, sizeof intvl_s) != 0) rc = -1;
+                                  &intvl_s, sizeof intvl_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
     if (count > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,
-                                &count, sizeof count) != 0) rc = -1;
+                                &count, sizeof count) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
     return rc;
 }

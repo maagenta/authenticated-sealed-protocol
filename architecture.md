@@ -31,26 +31,28 @@ that varies (command verbs, storage, registration policy).
                     │              │
             ┌───────▼──────┐ ┌─────▼────────┐
   both      │  wire        │ │  crypto      │   framing / keys, seal, sign
-            └──────────────┘ └─────┬────────┘
-                                   │
-                             ┌─────▼────────┐
-            constants        │  protocol.h  │
-                             └──────────────┘
+            └───────┬──────┘ └─────┬────────┘
+                    │              │
+              ┌─────▼──────┐ ┌─────▼────────┐
+  constants   │  error     │ │  protocol.h  │
+  and codes   └────────────┘ └──────────────┘
 ```
 
 Dependencies point strictly downward — no cycles. `auth` never knows `serve`
 exists, so you can replace the harness without touching the handshake.
+`error` sits at the bottom next to `protocol.h` and depends on nothing: every
+layer above returns its codes.
 
 **Who links what:**
 
 | Side | Sources to compile |
 |---|---|
-| Client | `wire.c crypto.c auth.c` |
-| Server | `wire.c crypto.c auth.c serve.c` |
+| Client | `error.c wire.c crypto.c auth.c` |
+| Server | `error.c wire.c crypto.c auth.c serve.c` |
 
 ## What each file contains
 
-Nine files — four modules plus one constants header — and one tool
+Eleven files — five modules plus one constants header — and one tool
 directory (`keygen/`). Full signatures and per-function semantics are in
 [docs.md](docs.md); this is the map of what lives where and why.
 
@@ -67,6 +69,24 @@ specification of the handshake. It defines:
 Everything else includes it, directly or transitively. Deliberately contains
 **no application constants** — ports, size limits, and command sets belong to
 each consuming app.
+
+### `error.h` / `error.c` — failure vocabulary
+
+The smallest module, and the only one every other links: the `proto_err_t`
+enum and `proto_strerror()`, which turns a code into a sentence.
+
+Codes are negative so that the pre-existing `rc < 0` and `rc != 0` tests in
+consuming code keep working — adopting them costs a recompile, not an audit.
+They are numbered sequentially with no structure encoded in the value: the
+name says which family a code belongs to, and a scheme that packs a domain
+into the number would have to be maintained for no gain at this size.
+
+**The library does not print.** Diagnostics used to go to `stderr` from
+`crypto.c`, which decided for every consumer where its errors appeared — no
+use to a daemon with structured logging or to a GUI. Returning a code and
+letting the application format it moves that choice where it belongs, and
+loses nothing: the caller already knows the path or port it passed in, so it
+can compose a better message than the library could.
 
 ### `wire.h` / `wire.c` — framing
 

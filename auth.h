@@ -2,6 +2,7 @@
 #define PROTO_AUTH_H
 
 #include "crypto.h"
+#include "error.h"
 
 /* An authenticated client session. */
 typedef struct {
@@ -14,7 +15,9 @@ typedef struct {
  * Client: TCP-connect to host:port, run the handshake, and on first
  * connection register this identity's encryption public key. conn->keys
  * must be populated (e.g. via proto_load_keys) before calling.
- * Returns 0 on success, -1 on any failure.
+ * Returns PROTO_OK, or the code for the stage that failed: PROTO_E_RESOLVE,
+ * PROTO_E_SOCKET, PROTO_E_CONNECT, PROTO_E_REJECTED,
+ * PROTO_E_REGISTER_REJECTED, or whatever the handshake returned.
  */
 int proto_connect(proto_conn_t *conn, const char *host, int port);
 
@@ -23,8 +26,9 @@ void proto_close(proto_conn_t *conn);
 
 /*
  * Client primitive: run HELLO/CHALLENGE/AUTH on an already-connected fd.
- * Returns 0 if authenticated (server replied OK), 1 if the server requests
- * registration (replied REGISTER), or -1 on failure.
+ * Returns PROTO_OK if authenticated (server replied OK),
+ * PROTO_REGISTER_REQUESTED if the server wants our encryption public key,
+ * or a negative code on failure.
  */
 int proto_auth_client(int fd, const proto_keys_t *keys);
 

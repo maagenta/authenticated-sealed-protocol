@@ -11,10 +11,11 @@
 
 int proto_auth_client(int fd, const proto_keys_t *keys) {
     char line[MAX_LINE];
+    int rc;
 
-    if (proto_send_line(fd, "HELLO") < 0) return -1;
-    if (proto_recv_line(fd, line, sizeof(line)) < 0) return -1;
-    if (strncmp(line, "CHALLENGE ", 10) != 0) return -1;
+    if ((rc = proto_send_line(fd, "HELLO")) < 0) return rc;
+    if ((rc = proto_recv_line(fd, line, sizeof(line))) < 0) return rc;
+    if (strncmp(line, "CHALLENGE ", 10) != 0) return PROTO_E_UNEXPECTED_REPLY;
 
     unsigned char challenge[CHALLENGE_LEN];
     size_t ch_len = 0;
@@ -22,11 +23,11 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
                           line + 10, strlen(line + 10),
                           NULL, &ch_len, NULL,
                           sodium_base64_VARIANT_ORIGINAL) != 0
-        || ch_len != CHALLENGE_LEN) return -1;
+        || ch_len != CHALLENGE_LEN) return PROTO_E_BAD_CHALLENGE;
 
     unsigned char sig[AUTH_SIG_LEN];
-    if (proto_sign_challenge(challenge, ch_len, keys->auth_sk, sig) != 0)
-        return -1;
+    if ((rc = proto_sign_challenge(challenge, ch_len, keys->auth_sk, sig)) != PROTO_OK)
+        return rc;
 
     char pk_b64[sodium_base64_ENCODED_LEN(AUTH_PK_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
     char sig_b64[sodium_base64_ENCODED_LEN(AUTH_SIG_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
@@ -35,16 +36,19 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
 
     char cmd[MAX_LINE];
     snprintf(cmd, sizeof(cmd), "AUTH %s %s", pk_b64, sig_b64);
-    if (proto_send_line(fd, cmd) < 0) return -1;
-    if (proto_recv_line(fd, line, sizeof(line)) < 0) return -1;
+    if ((rc = proto_send_line(fd, cmd)) < 0) return rc;
+    if ((rc = proto_recv_line(fd, line, sizeof(line))) < 0) return rc;
 
-    if (strcmp(line, "REGISTER") == 0) return 1;
-    if (strcmp(line, "OK") == 0)       return 0;
-    return -1;
+    if (strcmp(line, "REGISTER") == 0) return PROTO_REGISTER_REQUESTED;
+    if (strcmp(line, "OK") == 0)       return PROTO_OK;
+    /* Anything else is the server declining — usually a FAIL line carrying
+     * the reason, which the caller can read off the wire if it wants it. */
+    return PROTO_E_REJECTED;
 }
 
 int proto_connect(proto_conn_t *conn, const char *host, int port) {
-    if (proto_init() != 0) return -1;
+    int rc = proto_init();
+    if (rc != PROTO_OK) return rc;
 
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
@@ -53,22 +57,23 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
 
     char port_str[8];
     snprintf(port_str, sizeof(port_str), "%d", port);
-    if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return PROTO_E_RESOLVE;
 
     conn->fd = socket(res->ai_family, res->ai_socktype, 0);
-    if (conn->fd < 0) { freeaddrinfo(res); return -1; }
+    if (conn->fd < 0) { freeaddrinfo(res); return PROTO_E_SOCKET; }
     if (connect(conn->fd, res->ai_addr, res->ai_addrlen) != 0) {
-        freeaddrinfo(res); close(conn->fd); conn->fd = -1; return -1;
+        freeaddrinfo(res); close(conn->fd); conn->fd = -1;
+        return PROTO_E_CONNECT;
     }
     freeaddrinfo(res);
 
     sodium_bin2hex(conn->identity_hex, sizeof(conn->identity_hex),
                    conn->keys.auth_pk, AUTH_PK_LEN);
 
-    int rc = proto_auth_client(conn->fd, &conn->keys);
+    rc = proto_auth_client(conn->fd, &conn->keys);
     if (rc < 0) goto fail;
 
-    if (rc == 1) {  /* server requested registration: send our enc pubkey */
+    if (rc == PROTO_REGISTER_REQUESTED) {  /* send our enc pubkey */
         char epk_b64[sodium_base64_ENCODED_LEN(ENC_PK_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
         sodium_bin2base64(epk_b64, sizeof(epk_b64),
                           conn->keys.enc_pk, ENC_PK_LEN,
@@ -76,14 +81,16 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
         char reg[MAX_LINE];
         snprintf(reg, sizeof(reg), "REGISTER %s", epk_b64);
         char line[MAX_LINE];
-        if (proto_send_line(conn->fd, reg) < 0) goto fail;
-        if (proto_recv_line(conn->fd, line, sizeof(line)) < 0) goto fail;
-        if (strcmp(line, "OK") != 0) goto fail;
+        if ((rc = proto_send_line(conn->fd, reg)) < 0) goto fail;
+        if ((rc = proto_recv_line(conn->fd, line, sizeof(line))) < 0) goto fail;
+        if (strcmp(line, "OK") != 0) { rc = PROTO_E_REGISTER_REJECTED; goto fail; }
     }
-    return 0;
+    return PROTO_OK;
 
 fail:
-    close(conn->fd); conn->fd = -1; return -1;
+    /* rc carries why: the handshake code, a transport code, or the
+     * registration refusal. The socket is closed either way. */
+    close(conn->fd); conn->fd = -1; return rc;
 }
 
 void proto_close(proto_conn_t *conn) {

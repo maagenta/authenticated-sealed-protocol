@@ -9,6 +9,7 @@ Complete reference for the `proto` library. For the design rationale see
 - [Conventions](#conventions)
 - [Key files & formats](#key-files--formats)
 - [Constants (`protocol.h`)](#constants-protocolh)
+- [Error codes](#error-codes)
 - [Types](#types)
   - [`proto_keys_t`](#proto_keys_t)
   - [`proto_conn_t`](#proto_conn_t)
@@ -48,11 +49,20 @@ Complete reference for the `proto` library. For the design rationale see
 ## Conventions
 
 **Return values.**
-- Functions returning `int`: `0` = success, `-1` = failure, unless documented
-  otherwise (`proto_recv_line` returns a length; `proto_auth_client` has a
-  three-way result).
+- Functions returning `int`: `PROTO_OK` (`0`) = success, a negative
+  [error code](#error-codes) = failure. Every code is negative, so the older
+  `rc < 0` and `rc != 0` tests still work; read the code only when you want
+  the reason.
+- Success is `0` **or positive**: `proto_recv_line` returns the line length,
+  `proto_auth_client` returns `PROTO_REGISTER_REQUESTED`, and
+  `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works
+  but its timing did not take. `rc < 0` therefore always means failure.
 - Functions returning a pointer: non-`NULL` = success, `NULL` = failure.
+  These carry no code — `proto_auth_server` reports the reason to the peer as
+  a `FAIL` line instead.
 - Failures are indicated by return value only; `errno` is not reliably set.
+  Where `errno` distinguishes causes worth knowing (`bind` failing because
+  the port is taken, say), the library reads it and hands you a code.
 
 **Memory ownership.**
 - Any function whose name ends in `_new`, plus `proto_recv_line_dyn` and
@@ -136,6 +146,105 @@ Sealed-box overhead (from libsodium, used in buffer math):
 
 ---
 
+## Error codes
+
+`#include "error.h"` — the `proto_err_t` enum and one function.
+
+```c
+const char *proto_strerror(int err);
+```
+
+Every failing `int`-returning function returns one of these. Failures are all
+negative and assigned sequentially; the number itself carries no structure,
+the name and the group say what it means. Treat the values as opaque and
+compare against the names.
+
+**Success values** are `0` or positive, so `rc < 0` always means "something
+failed" and never anything else:
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_OK` | success, nothing else to report | everything |
+| `PROTO_REGISTER_REQUESTED` | authenticated; the server wants our encryption public key | `proto_auth_client` |
+| `PROTO_KEEPALIVE_DEFAULTED` | probing is on, but a timing knob kept the system value | `proto_keepalive` |
+
+**The library never prints.** `proto_strerror` gives you the text and your
+application decides where it goes — stderr, syslog, a log file, a dialog:
+
+```c
+int rc = proto_serve(5000, allowed, on_client, &db);
+if (rc != PROTO_OK)
+    my_log(LOG_ERR, "server: %s", proto_strerror(rc));   /* "port already in use" */
+```
+
+`proto_strerror` never returns `NULL`; an unrecognized value yields
+`"unknown error"`, so it is safe to pass any return value straight through.
+
+**Caller mistakes**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_PARAM` | invalid argument | `proto_recv_line` with `bufsz == 0` |
+| `PROTO_E_BUFFER_TOO_SMALL` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
+| `PROTO_E_NO_ALLOWLIST` | `allowed_hex` is `NULL` | `proto_serve` |
+| `PROTO_E_BAD_ALLOWLIST` | `allowed_hex` is not 64 hex chars | `proto_serve` |
+| `PROTO_E_NO_HANDLER` | `handler` is `NULL` | `proto_serve` |
+
+**Resources and initialization**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_NOMEM` | allocation failed | `proto_seal` |
+| `PROTO_E_SODIUM` | `sodium_init()` failed | `proto_init`, `proto_connect`, `proto_serve` |
+
+**Key files**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_KEY_OPEN` | could not open the file | `proto_load_keys`, `proto_load_pubkey_hex` |
+| `PROTO_E_KEY_EMPTY` | file is empty | idem |
+| `PROTO_E_KEY_FORMAT` | not base64 of the expected size | idem |
+
+**Cryptography**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_CRYPTO` | libsodium operation failed | `proto_seal`, `proto_sign_challenge` |
+| `PROTO_E_BAD_SIGNATURE` | signature did not verify | `proto_verify_challenge` |
+
+**Sockets and addressing**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_SOCKET` | `socket()` failed | `proto_connect`, `proto_serve` |
+| `PROTO_E_RESOLVE` | `getaddrinfo()` failed | `proto_connect` |
+| `PROTO_E_CONNECT` | `connect()` failed | `proto_connect` |
+| `PROTO_E_BIND` | `bind()` failed for another reason | `proto_serve` |
+| `PROTO_E_PORT_IN_USE` | `bind()` failed with `EADDRINUSE` | `proto_serve` |
+| `PROTO_E_PERM_DENIED` | `bind()` denied — `EACCES` or `EPERM` | `proto_serve` |
+| `PROTO_E_LISTEN` | `listen()` failed | `proto_serve` |
+| `PROTO_E_KEEPALIVE` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
+
+**Reading and writing lines**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_WRITE` | `write()` failed | `proto_send_line`, `proto_send_prefixed` |
+| `PROTO_E_READ` | `read()` failed | `proto_recv_line` |
+| `PROTO_E_PEER_CLOSED` | the peer closed the connection | `proto_recv_line` |
+| `PROTO_E_LINE_TOO_LONG` | the line did not fit; the rest is still unread | `proto_recv_line` |
+
+**Handshake, client side**
+
+| Code | Meaning | Returned by |
+|---|---|---|
+| `PROTO_E_UNEXPECTED_REPLY` | the server said something else | `proto_auth_client` |
+| `PROTO_E_BAD_CHALLENGE` | challenge malformed or not 32 bytes | `proto_auth_client` |
+| `PROTO_E_REJECTED` | the server refused the handshake | `proto_auth_client`, `proto_connect` |
+| `PROTO_E_REGISTER_REJECTED` | the server refused our `REGISTER` | `proto_connect` |
+
+---
+
 ## Types
 
 ### `proto_keys_t`
@@ -216,7 +325,7 @@ Write `line` followed by `\n`.
 | `fd` | connected socket |
 | `line` | NUL-terminated string, **must not contain `\n`** |
 
-**Returns** `0` on success, `-1` on short write / error.
+**Returns** `PROTO_OK`, or `PROTO_E_WRITE` on short write / error.
 
 ```c
 proto_send_line(fd, "OK");
@@ -238,7 +347,10 @@ NUL-terminated.
 | `buf` | caller buffer |
 | `bufsz` | its size; must be ≥ 1, and `0` is rejected with `-1` |
 
-**Returns** the line length (≥ 0), or `-1` on error/EOF.
+**Returns** the line length (≥ 0), or a negative [code](#error-codes):
+`PROTO_E_PEER_CLOSED` if the peer closed, `PROTO_E_READ` on a socket error,
+`PROTO_E_LINE_TOO_LONG` if the line did not fit, `PROTO_E_PARAM` if `bufsz`
+is `0`. On every error path `buf` is still NUL-terminated.
 
 **Pitfall:** if the incoming line is longer than `bufsz - 1`, the read stops
 early and **the rest of the line stays in the socket**, corrupting the next
@@ -290,7 +402,7 @@ buffer — the standard way to send `VERB <big_base64_payload>`.
 | `body` | payload bytes (typically base64 from `proto_seal_new`) |
 | `body_len` | length of `body` (for base64, `strlen(body)` is safe) |
 
-**Returns** `0` / `-1`.
+**Returns** `PROTO_OK` / `PROTO_E_WRITE`.
 
 ```c
 char *sealed = proto_seal_new(data, data_len, conn.keys.enc_pk);
@@ -331,8 +443,9 @@ with `errno == ETIMEDOUT`, so existing teardown paths run unchanged. A peer
 whose host is alive but whose process died answers `RST` instead, and the
 connection fails immediately without waiting for `count` probes.
 
-**Returns** `0`; `-1` if the socket rejected an option, in which case earlier
-knobs in the call may already have been applied.
+**Returns** `PROTO_OK`; `PROTO_KEEPALIVE_DEFAULTED` (a positive value, not a
+failure) if probing is on but a timing knob was rejected and kept the system
+value; `PROTO_E_KEEPALIVE` if the socket refused probing altogether.
 
 **Not a read timeout.** This is a backstop against blocking forever, not a way
 to give up promptly — it says nothing about how long *you* wait for a reply.
@@ -374,7 +487,8 @@ int proto_init(void);
 Initialize libsodium. Call once at startup. Idempotent — safe to call again.
 Called internally by `proto_connect` and `proto_serve`.
 
-**Returns** `0` / `-1` (failure means libsodium could not initialize; abort).
+**Returns** `PROTO_OK` / `PROTO_E_SODIUM` (libsodium could not initialize;
+there is no way to continue — abort).
 
 ### `proto_load_keys`
 
@@ -393,8 +507,11 @@ derive both public keys into `out`.
 | `enc_sk_path` | path to `enc.key` (base64 X25519 secret, 32 B decoded) |
 | `out` | filled on success |
 
-**Returns** `0` / `-1`. On failure an explanatory message is printed to
-`stderr` (missing file, empty file, bad base64/size).
+**Returns** `PROTO_OK`, or `PROTO_E_KEY_OPEN`, `PROTO_E_KEY_EMPTY` or
+`PROTO_E_KEY_FORMAT`. The code says what went wrong but not which of the two
+files: call it once per file if you need that distinction. Nothing is
+printed — pass the code to [`proto_strerror`](#error-codes) and log it where
+you want.
 
 ```c
 proto_conn_t c = { .fd = -1 };
@@ -416,7 +533,8 @@ into `hex_out`. This is how a server builds its allowlist string.
 | `hex_out` | buffer of at least `AUTH_PK_LEN * 2 + 1` bytes |
 | `hex_sz` | its size |
 
-**Returns** `0` / `-1` (prints the reason to `stderr`).
+**Returns** `PROTO_OK`, one of the `PROTO_E_KEY_*` codes, or
+`PROTO_E_BUFFER_TOO_SMALL` if `hex_sz` is below `AUTH_PK_LEN * 2 + 1`.
 
 ```c
 char allowed[AUTH_PK_LEN * 2 + 1];
@@ -438,7 +556,9 @@ allocation yourself; otherwise use [`proto_seal_new`](#proto_seal_new).
 Required buffer size:
 `sodium_base64_ENCODED_LEN(msg_len + crypto_box_SEALBYTES, sodium_base64_VARIANT_ORIGINAL) + 1`.
 
-**Returns** `0` / `-1`. Binary-safe: `msg` may contain NUL bytes.
+**Returns** `PROTO_OK`, `PROTO_E_BUFFER_TOO_SMALL` if `out_b64_sz` is below
+the size given above, `PROTO_E_NOMEM`, or `PROTO_E_CRYPTO`. Binary-safe:
+`msg` may contain NUL bytes.
 
 Note: sealing needs only the **public** key — any holder of `enc_pk` can
 write blobs that only the `enc_sk` holder can read.
@@ -506,7 +626,7 @@ int proto_sign_challenge(const unsigned char *challenge, size_t clen,
 
 Detached-sign `challenge` with the Ed25519 secret key. `sig` must be at least
 `AUTH_SIG_LEN` (64) bytes. Used internally by the client handshake; public in
-case you build a custom transport. **Returns** `0` / `-1`.
+case you build a custom transport. **Returns** `PROTO_OK` / `PROTO_E_CRYPTO`.
 
 ### `proto_verify_challenge`
 
@@ -518,7 +638,7 @@ int proto_verify_challenge(const unsigned char *challenge, size_t clen,
 
 Verify a detached signature against a public key. The server-side twin of
 `proto_sign_challenge`; used internally by `proto_auth_server`. **Returns**
-`0` if the signature is valid, `-1` otherwise.
+`PROTO_OK` if the signature is valid, `PROTO_E_BAD_SIGNATURE` otherwise.
 
 ---
 
@@ -552,13 +672,15 @@ The turnkey client session opener. In one call:
 | `host` | hostname or address |
 | `port` | server port (application policy — the library has no default) |
 
-**Returns** `0` on success; `-1` on any failure (DNS, connect, handshake
-rejected, registration rejected), with `conn->fd` left at `-1` and the socket
-closed.
+**Returns** `PROTO_OK` on success, or the code for the stage that failed —
+`PROTO_E_RESOLVE`, `PROTO_E_SOCKET`, `PROTO_E_CONNECT`, `PROTO_E_REJECTED`,
+`PROTO_E_REGISTER_REJECTED`, or whatever the handshake returned. On failure
+`conn->fd` is left at `-1` and the socket is closed.
 
-**Pitfall:** the call is all-or-nothing; there is no way to distinguish
-"network down" from "access denied" from the return code. For diagnostics,
-drop to `proto_auth_client` (which separates transport from protocol errors).
+The return code says which stage failed: `PROTO_E_RESOLVE` and
+`PROTO_E_CONNECT` for the network, `PROTO_E_REJECTED` when the server
+declined the handshake, `PROTO_E_REGISTER_REJECTED` when it declined the
+registration. Pass it to [`proto_strerror`](#error-codes) for the message.
 
 ### `proto_close`
 
@@ -642,9 +764,11 @@ The turnkey server. In one call:
 | `handler` | your per-connection function ([contract](#proto_handler_fn)) |
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
 
-**Returns** never on success (blocks forever); `-1` on fatal setup errors
-(a `NULL` `allowed_hex`, libsodium, socket, bind, listen — e.g. port already
-in use). The allowlist is checked first, before the port is bound, so a
+**Returns** never on success (blocks forever); on fatal setup errors it
+returns `PROTO_E_NO_ALLOWLIST`, `PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`,
+`PROTO_E_SODIUM`, `PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`,
+`PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or `PROTO_E_LISTEN`. The allowlist is
+checked first, before the port is bound, so a
 misconfigured server fails at startup instead of rejecting every connection.
 
 **When not to use it:** threads instead of forks, event loops, several
@@ -1064,11 +1188,12 @@ LDFLAGS = -lsodium
 
 client: vault-client.c
 	$(CC) $(CFLAGS) -o vault-client vault-client.c \
-	      protocol/wire.c protocol/crypto.c protocol/auth.c $(LDFLAGS)
+	      protocol/error.c protocol/wire.c protocol/crypto.c protocol/auth.c $(LDFLAGS)
 
 server: vault-server.c
 	$(CC) $(CFLAGS) -o vault-server vault-server.c \
-	      protocol/wire.c protocol/crypto.c protocol/auth.c protocol/serve.c $(LDFLAGS)
+	      protocol/error.c protocol/wire.c protocol/crypto.c protocol/auth.c \
+	      protocol/serve.c $(LDFLAGS)
 ```
 
 - The library is consumed **as source** — no `libproto.a`, no build ordering,
@@ -1106,12 +1231,15 @@ original X25519 secret key — back it up.
 **Large payloads arrive truncated / connection desyncs after one.**
 Somewhere a payload line is being read with `proto_recv_line` into a fixed
 buffer. Fixed-buffer reads stop at `bufsz-1` and leave the remainder in the
-socket, desynchronizing everything after. Read any line that can carry a
+socket, desynchronizing everything after. That read returns
+`PROTO_E_LINE_TOO_LONG`, so check for it — and read any line that can carry a
 payload with `proto_recv_line_dyn`.
 
-**Error: could not open `auth.key`.**
+**`proto_load_keys` returns `PROTO_E_KEY_OPEN`.**
 Key paths are resolved relative to the process working directory. Pass
-absolute paths or run from the directory containing the keys.
+absolute paths or run from the directory containing the keys. The library
+does not print anything — feed the code to
+[`proto_strerror`](#error-codes) and log it yourself.
 
 **Can two clients share one identity?**
 Yes — copy both key files. They'll authenticate as the same user and decrypt

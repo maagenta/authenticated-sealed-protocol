@@ -24,6 +24,7 @@ application defines only its own command verbs (e.g. `POST`, `GET`) on top.
 - Low-level primitives stay public, so custom accept loops / transports are possible
 - No size ceiling: dynamic line reads and length-based payload APIs
 - Optional TCP keepalive per connection (`proto_keepalive`), off unless you ask for it
+- Typed error codes with `proto_strerror()`; the library never writes to your console
 - Bundled `keygen` tool to provision an identity's key files
 - Zero dependencies beyond **libsodium** and libc; no TLS stack required
 
@@ -39,10 +40,11 @@ consuming project's Makefile:
 CFLAGS  = -Wall -Wextra -O2 -I..           # so "protocol/xxx.h" resolves
 LDFLAGS = -lsodium
 SRCS    = main.c \
-          ../protocol/wire.c ../protocol/crypto.c ../protocol/auth.c ../protocol/serve.c
+          ../protocol/error.c ../protocol/wire.c ../protocol/crypto.c \
+          ../protocol/auth.c ../protocol/serve.c
 ```
 
-(Clients don't need `serve.c`; servers need all four.)
+(Clients don't need `serve.c`; servers need all five.)
 
 ## Generating keys
 
@@ -138,6 +140,7 @@ int main(void) {
 | File | Purpose |
 |---|---|
 | `protocol.h` | Shared constants (key sizes, `MAX_LINE`, `CHALLENGE_LEN`) and the wire-format spec |
+| `error.h` / `error.c` | Error codes returned by every function, and `proto_strerror()` to describe them |
 | `wire.h` / `wire.c` | Line framing: send/receive `\n`-terminated lines, fixed or dynamic buffers; optional keepalive |
 | `crypto.h` / `crypto.c` | Keypairs (`proto_keys_t`), key loading, sealed-box encrypt/decrypt, challenge sign/verify |
 | `auth.h` / `auth.c` | Client session (`proto_conn_t`, `proto_connect`, `proto_close`) and the handshake primitives for both sides |
