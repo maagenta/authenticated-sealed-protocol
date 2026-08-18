@@ -2,15 +2,36 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-int proto_send_line(int fd, const char *line) {
-    size_t len = strlen(line);
-    if (write(fd, line, len) != (ssize_t)len) return PROTO_E_WRITE;
-    if (write(fd, "\n", 1) != 1) return PROTO_E_WRITE;
+/* write() may transfer fewer bytes than asked without failing, and a signal
+ * may interrupt it after a partial transfer. Treating either as an error
+ * would report failure with part of the line already on the wire, leaving
+ * the stream desynchronized. Resume instead, and only give up when the
+ * connection really fails. EAGAIN counts as a failure: the library is
+ * documented as blocking, so a non-blocking fd is outside its contract. */
+static int write_all(int fd, const void *buf, size_t n) {
+    const char *p = buf;
+    while (n > 0) {
+        ssize_t w = write(fd, p, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;   /* interrupted, nothing lost */
+            return PROTO_E_WRITE;
+        }
+        if (w == 0) return PROTO_E_WRITE;   /* no progress; give up */
+        p += w;
+        n -= (size_t)w;
+    }
     return PROTO_OK;
+}
+
+int proto_send_line(int fd, const char *line) {
+    int rc = write_all(fd, line, strlen(line));
+    if (rc != PROTO_OK) return rc;
+    return write_all(fd, "\n", 1);
 }
 
 int proto_recv_line(int fd, char *buf, size_t bufsz) {
@@ -59,10 +80,10 @@ char *proto_recv_line_dyn(int fd) {
 
 int proto_send_prefixed(int fd, const char *prefix,
                         const char *body, size_t body_len) {
-    size_t plen = strlen(prefix);
-    return (write(fd, prefix, plen) == (ssize_t)plen &&
-            write(fd, body, body_len) == (ssize_t)body_len &&
-            write(fd, "\n", 1) == 1) ? PROTO_OK : PROTO_E_WRITE;
+    int rc;
+    if ((rc = write_all(fd, prefix, strlen(prefix))) != PROTO_OK) return rc;
+    if ((rc = write_all(fd, body, body_len))         != PROTO_OK) return rc;
+    return write_all(fd, "\n", 1);
 }
 
 int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {

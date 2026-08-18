@@ -71,7 +71,8 @@ Complete reference for the `proto` library. For the design rationale see
 
 **Process model.**
 - The library is synchronous and blocking. One `proto_conn_t` / one fd per
-  connection; do not share a connection between threads.
+  connection; do not share a connection between threads. A non-blocking fd
+  is outside the contract: the send path treats `EAGAIN` as a failure.
 - `proto_serve` forks one child per connection; your handler runs in the
   child. In-memory state is per-connection, not shared (see
   [architecture.md](architecture.md)).
@@ -325,7 +326,9 @@ Write `line` followed by `\n`.
 | `fd` | connected socket |
 | `line` | NUL-terminated string, **must not contain `\n`** |
 
-**Returns** `PROTO_OK`, or `PROTO_E_WRITE` on short write / error.
+**Returns** `PROTO_OK` or `PROTO_E_WRITE`. A short write is resumed and an
+interrupted one retried, so success means the whole line reached the socket
+and failure means the connection broke — never a half-sent line.
 
 ```c
 proto_send_line(fd, "OK");
