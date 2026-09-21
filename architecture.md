@@ -176,6 +176,15 @@ accepted connections. Keepalive is not set — a connection behaves as it did
 in v1.0 until the application asks for probing with `proto_keepalive`, on
 either end.
 
+The harness also ignores `SIGPIPE` for the whole process. The library's own
+writes no longer need that — `wire` sends with `MSG_NOSIGNAL`, so a dead
+peer comes back as `PROTO_E_WRITE` on both ends — but a handler that calls
+`write()` on the socket itself would still be killed without it, and a
+forking server is the one place where a process-wide disposition costs
+nothing: the child is the library's, not the application's. Clients get no
+such default; `proto_connect` sets no signal disposition, and does not need
+to, because every write the library makes on their behalf is already safe.
+
 The cost is a window this module cannot delegate: `proto_serve` accepts,
 forks and runs the handshake before the handler receives the fd, so a peer
 that disappears mid-handshake leaves that child blocked in `read()` with no

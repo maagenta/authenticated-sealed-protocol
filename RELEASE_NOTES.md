@@ -2,7 +2,7 @@
 
 ## v1.1 — Error codes, keepalive and fixes [Unreleased]
 
-Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and four defects carried over from v1.0 are fixed.
+Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and seven defects carried over from v1.0 are fixed.
 
 **Consuming projects must add `status.c` to their source list.** That is the only breaking change — existing C code compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
 
@@ -36,6 +36,9 @@ A peer that vanishes without closing — a suspended laptop, a phone off the net
 - **Segfault on an unusable allowlist.** `proto_auth_server` ran the whole handshake and then called `strcmp(hex, allowed_hex)` without checking it, so a server configured from an environment variable or a zeroed struct died of `SIGSEGV` in every forked child — silently, since the parent survived and the reaper collected the corpse. `proto_serve` now refuses to start on a `NULL` or wrong-length allowlist or a `NULL` handler, before the port is bound; `proto_auth_server` sends `FAIL internal error` and returns `NULL` before reading `HELLO`.
 - **Two aborts became return values.** `sodium_bin2hex` and `sodium_bin2base64` kill the process when handed an undersized buffer, and `proto_load_pubkey_hex` and `proto_seal` passed caller-supplied sizes straight through. Both now check first and return `PROTO_E_BUFFER_TOO_SMALL`. `docs.md` claimed `proto_seal` returned `-1` in that case; it did not.
 - **Silent line truncation.** `proto_recv_line` returned a length whether or not the line fit, so a truncation — which leaves the rest of the line in the socket and desynchronizes every read after it — looked exactly like success. It now returns `PROTO_E_LINE_TOO_LONG`, and NUL-terminates `buf` on every error path.
+- **Short writes reported as failures.** `write()` may transfer fewer bytes than asked; `proto_send_line` and `proto_send_prefixed` treated that as an error with part of the line already on the wire, leaving the stream desynchronized. Both now resume until everything is sent, so they either deliver the whole line or fail on a real connection error.
+- **Signals aborted reads.** A signal arriving during a blocked `read()` returns `EINTR` with nothing consumed; the library reported it as `PROTO_E_READ` and lost the line that arrived a moment later. Reads and writes now retry on `EINTR`. The consequence — a handler alone cannot cancel a blocked read; `shutdown()` on the fd can — is documented in the FAQ.
+- **SIGPIPE killed clients.** Writing to a peer that had closed raised `SIGPIPE`, whose default action terminates the process before `write()` can return, so the `PROTO_E_WRITE` path never ran and a client lost whatever it was doing. `proto_serve` had always ignored the signal process-wide; `proto_connect` never did. The library's writes now use `send()` with `MSG_NOSIGNAL`, per call, so a dead peer surfaces as `PROTO_E_WRITE` on either end without the library deciding the process's signal disposition.
 
 Documentation: `docs.md` gains an "Error codes" section and a reference entry for `proto_keepalive`, and every `Returns` line lists its codes; `architecture.md` documents the new module and why the library does not print.
 

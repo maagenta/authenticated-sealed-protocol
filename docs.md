@@ -77,6 +77,12 @@ Complete reference for the `proto` library. For the design rationale see
   handler alone cannot break a caller out of a blocked read; the FAQ entry
   "My program ignores Ctrl-C while waiting for a line" shows how to cancel
   one.
+- The library's own writes never raise `SIGPIPE`: they use `send()` with
+  `MSG_NOSIGNAL`, so a vanished peer surfaces as `PROTO_E_WRITE` and the
+  process keeps running. This covers the library's calls only — a `write()`
+  of your own to a dead socket is still yours to protect. On a platform
+  without `MSG_NOSIGNAL` (none of the supported ones) the writes go out
+  unprotected and the application must ignore `SIGPIPE` itself.
 - `proto_serve` forks one child per connection; your handler runs in the
   child. In-memory state is per-connection, not shared (see
   [architecture.md](architecture.md)).
@@ -355,7 +361,10 @@ Write `line` followed by `\n`.
 
 **Returns** `PROTO_OK` or `PROTO_E_WRITE`. A short write is resumed and an
 interrupted one retried, so success means the whole line reached the socket
-and failure means the connection broke — never a half-sent line.
+and failure means the connection broke — never a half-sent line. Writing to
+a peer that has closed returns `PROTO_E_WRITE`; it does not raise `SIGPIPE`,
+so the caller gets to save its state and close the socket instead of being
+killed.
 
 ```c
 proto_send_line(fd, "OK");
@@ -432,7 +441,8 @@ buffer — the standard way to send `VERB <big_base64_payload>`.
 | `body` | payload bytes (typically base64 from `proto_seal_new`) |
 | `body_len` | length of `body` (for base64, `strlen(body)` is safe) |
 
-**Returns** `PROTO_OK` / `PROTO_E_WRITE`.
+**Returns** `PROTO_OK` / `PROTO_E_WRITE`. As with `proto_send_line`, a peer
+that has closed yields `PROTO_E_WRITE` rather than `SIGPIPE`.
 
 ```c
 char *sealed = proto_seal_new(data, data_len, conn.keys.enc_pk);

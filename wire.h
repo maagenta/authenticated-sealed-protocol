@@ -11,7 +11,8 @@
  */
 
 /* Write line + '\n'. Short writes are resumed and EINTR is retried, so this
- * either sends the whole line or fails. Returns PROTO_OK or PROTO_E_WRITE. */
+ * either sends the whole line or fails. A peer that has gone yields
+ * PROTO_E_WRITE, not SIGPIPE. Returns PROTO_OK or PROTO_E_WRITE. */
 int proto_send_line(int fd, const char *line);
 
 /* Read one line into a fixed buffer (NUL-terminated, newline stripped).
@@ -27,7 +28,8 @@ int proto_recv_line(int fd, char *buf, size_t bufsz);
 char *proto_recv_line_dyn(int fd);
 
 /* Write "<prefix><body>\n" without an intermediate buffer. body may be large;
- * short writes are resumed, so this either sends everything or fails.
+ * short writes are resumed, so this either sends everything or fails. A peer
+ * that has gone yields PROTO_E_WRITE, not SIGPIPE.
  * Returns PROTO_OK or PROTO_E_WRITE. */
 int proto_send_prefixed(int fd, const char *prefix,
                         const char *body, size_t body_len);

@@ -7,16 +7,30 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-/* write() may transfer fewer bytes than asked without failing, and a signal
+/* Writing to a socket whose peer has gone raises SIGPIPE, which kills the
+ * process by default — before the write can return, so the PROTO_E_WRITE
+ * path never runs. MSG_NOSIGNAL asks for EPIPE instead, per call, without
+ * imposing a process-wide signal disposition on the application. Linux,
+ * macOS and the BSDs have it; on a platform without it the write goes out
+ * unprotected and the application must handle SIGPIPE itself. */
+#ifdef MSG_NOSIGNAL
+#define SEND_FLAGS MSG_NOSIGNAL
+#else
+#define SEND_FLAGS 0
+#endif
+
+/* send() may transfer fewer bytes than asked without failing, and a signal
  * may interrupt it after a partial transfer. Treating either as an error
  * would report failure with part of the line already on the wire, leaving
  * the stream desynchronized. Resume instead, and only give up when the
  * connection really fails. EAGAIN counts as a failure: the library is
- * documented as blocking, so a non-blocking fd is outside its contract. */
+ * documented as blocking, so a non-blocking fd is outside its contract.
+ * send() rather than write() so the flag applies; the fd is documented as
+ * a connected socket, which is all send() accepts. */
 static int write_all(int fd, const void *buf, size_t n) {
     const char *p = buf;
     while (n > 0) {
-        ssize_t w = write(fd, p, n);
+        ssize_t w = send(fd, p, n, SEND_FLAGS);
         if (w < 0) {
             if (errno == EINTR) continue;   /* interrupted, nothing lost */
             return PROTO_E_WRITE;
