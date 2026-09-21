@@ -11,6 +11,7 @@ const char *proto_strerror(int code) {
     case PROTO_E_NO_ALLOWLIST:      return "no allowlist configured";
     case PROTO_E_BAD_ALLOWLIST:     return "allowlist is not 64 hex characters";
     case PROTO_E_NO_HANDLER:        return "no connection handler given";
+    case PROTO_E_BAD_ADDRESS:       return "bind address is not an IPv4 literal";
 
     case PROTO_E_NOMEM:             return "out of memory";
     case PROTO_E_SODIUM:            return "libsodium initialization failed";

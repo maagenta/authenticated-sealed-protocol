@@ -131,7 +131,7 @@ int main(void) {
     if (proto_init() != 0) return 1;
     char allowed[AUTH_PK_LEN * 2 + 1];
     if (proto_load_pubkey_hex("auth.pub", allowed, sizeof allowed) != 0) return 1;
-    return proto_serve(5000, allowed, on_client, NULL);   /* blocks forever */
+    return proto_serve(5000, allowed, on_client, NULL, NULL);   /* blocks forever */
 }
 ```
 

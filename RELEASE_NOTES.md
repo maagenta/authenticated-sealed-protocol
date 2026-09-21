@@ -2,13 +2,13 @@
 
 ## v1.1 — Error codes, keepalive and fixes [Unreleased]
 
-Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and eight defects carried over from v1.0 are fixed.
+Four things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, a server can choose which interface to listen on, and eight defects carried over from v1.0 are fixed.
 
-**Consuming projects must add `status.c` to their source list.** That is the only breaking change — existing C code compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
+**Two breaking changes for consuming projects.** Add `status.c` to the source list, and pass a fifth argument to `proto_serve` — `NULL` keeps the old behaviour. Everything else compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
 
 ### Error codes
 
-New module `status` — the `proto_status_t` enum (32 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
+New module `status` — the `proto_status_t` enum (33 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
 
 - **`rc < 0` means failure, always.** Failures are negative; success is `0` or positive. `proto_recv_line` returns a line length, `proto_auth_client` returns `PROTO_REGISTER_REQUESTED` when the server wants our encryption key, and `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works but a timing knob kept the system value. Adopting the codes costs a recompile, not an audit.
 - **The library stopped printing.** `crypto.c` used to write "Error: could not open …" to `stderr`, deciding for every consumer where its diagnostics appeared — useless to a daemon with structured logging or to a GUI. The reason now travels in the return value and the application formats it.
@@ -29,6 +29,14 @@ A peer that vanishes without closing — a suspended laptop, a phone off the net
 - **The platform difference lives in the library.** The first knob is spelled `TCP_KEEPIDLE` on Linux and `TCP_KEEPALIVE` on macOS; `proto_keepalive` absorbs that `#ifdef` so consumers do not repeat it. The other two (`TCP_KEEPINTVL`, `TCP_KEEPCNT`) are spelled the same everywhere.
 - **Not a read timeout.** It does not touch read semantics: no `SO_RCVTIMEO`, no partial-line hazard. Detection takes about two hours at system defaults — a backstop against blocking forever, not a way to give up promptly.
 - **The kernel handles both sides.** Probes are answered by the peer's TCP stack, so no application, on either end, needs to know or be updated. Nothing is added to the wire protocol: a v1.0 peer interoperates unchanged.
+
+### Bind address
+
+`proto_serve` takes a fifth parameter, `const proto_serve_opts_t *opts`, and the struct has one field: `bind_addr`, an IPv4 literal to listen on. `NULL` — for the struct or the field — listens on every interface, as v1.0 did. A malformed address fails with `PROTO_E_BAD_ADDRESS` before the port is bound, alongside the other caller mistakes.
+
+- **A struct, not a string,** so later deployment options join it without another signature change. Zero means default, so a designated initializer naming one field is complete: `{ .bind_addr = "127.0.0.1" }`. Never pass an uninitialized struct.
+- **Deployment options only.** The timeouts are not in it: they are per-project policy and come from `-D` in the consuming Makefile (see Fixes).
+- **No name resolution.** A bind address is a fact about the host; what a name resolves to at startup is not one.
 
 ### Fixes
 

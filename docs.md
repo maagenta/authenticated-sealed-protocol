@@ -15,6 +15,7 @@ Complete reference for the `proto` library. For the design rationale see
   - [`proto_keys_t`](#proto_keys_t)
   - [`proto_conn_t`](#proto_conn_t)
   - [`proto_handler_fn`](#proto_handler_fn)
+  - [`proto_serve_opts_t`](#proto_serve_opts_t)
 - [Module `wire` — framing](#module-wire--framing)
   - [`proto_send_line`](#proto_send_line)
   - [`proto_recv_line`](#proto_recv_line)
@@ -216,7 +217,7 @@ without a named constant.
 application decides where it goes — stderr, syslog, a log file, a dialog:
 
 ```c
-int rc = proto_serve(5000, allowed, on_client, &db);
+int rc = proto_serve(5000, allowed, on_client, &db, NULL);
 if (rc < 0)
     my_log(LOG_ERR, "server: %s", proto_strerror(rc));   /* "port already in use" */
 ```
@@ -242,6 +243,7 @@ the sign rule and the successes.
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 hex chars | `proto_serve` |
 | `PROTO_E_NO_HANDLER` | `-105` | `handler` is `NULL` | `proto_serve` |
+| `PROTO_E_BAD_ADDRESS` | `-106` | `opts->bind_addr` is not an IPv4 dotted literal | `proto_serve` |
 
 **Resources and initialization**
 
@@ -362,6 +364,35 @@ authenticated successfully**.
 
 When the handler returns, the child closes the socket and exits. Anything the
 handler changes in memory is lost — persist through your storage.
+
+### `proto_serve_opts_t`
+
+```c
+typedef struct {
+    const char *bind_addr;   /* IPv4 literal to listen on; NULL = all interfaces */
+} proto_serve_opts_t;
+```
+
+Deployment options for [`proto_serve`](#proto_serve). Every field has a
+default, and **zero means default**: `NULL` for a pointer. Passing `NULL`
+instead of a struct means every default — that is what most callers do.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `bind_addr` | `NULL` (every interface) | IPv4 address to listen on, as a dotted literal such as `"127.0.0.1"` or `"10.0.0.5"`. No name resolution; anything `inet_pton` rejects fails `proto_serve` with `PROTO_E_BAD_ADDRESS` before the port is touched. |
+
+**Always use a designated initializer.** It zeroes every field you do not
+name, which is what makes "zero means default" safe, and it keeps compiling
+when a field is added in a later version:
+
+```c
+proto_serve_opts_t opts = { .bind_addr = "127.0.0.1" };
+return proto_serve(5000, allowed, on_client, ctx, &opts);
+```
+
+A struct declared without an initializer holds garbage; passing it is
+undefined behaviour, not "the defaults". Fields are only ever appended, so
+positional initializers are also a trap — name the field.
 
 ---
 
@@ -861,14 +892,16 @@ variants and storage code can key on it.
 
 ```c
 int proto_serve(int port, const char *allowed_hex,
-                proto_handler_fn handler, void *ctx);
+                proto_handler_fn handler, void *ctx,
+                const proto_serve_opts_t *opts);
 ```
 
 The turnkey server. In one call:
 
 1. initializes libsodium,
 2. ignores `SIGPIPE`, installs a `SIGCHLD` reaper (no zombies),
-3. creates the listening socket (`SO_REUSEADDR`, backlog 16, all interfaces),
+3. creates the listening socket (`SO_REUSEADDR`, backlog 16, on
+   `opts->bind_addr` or every interface),
 4. loops forever: `accept` → `fork` → in the child, authenticate with
    [`proto_auth_server`](#proto_auth_server) → on success call
    `handler(fd, identity_hex, ctx)` → close and `_exit`.
@@ -879,13 +912,15 @@ The turnkey server. In one call:
 | `allowed_hex` | authorized identity (see `proto_load_pubkey_hex`) |
 | `handler` | your per-connection function ([contract](#proto_handler_fn)) |
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
+| `opts` | deployment options ([`proto_serve_opts_t`](#proto_serve_opts_t)); `NULL` for all defaults |
 
 **Returns** never on success (blocks forever); on fatal setup errors it
 returns `PROTO_E_NO_ALLOWLIST`, `PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`,
-`PROTO_E_SODIUM`, `PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`,
-`PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or `PROTO_E_LISTEN`. The allowlist is
-checked first, before the port is bound, so a
-misconfigured server fails at startup instead of rejecting every connection.
+`PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`, `PROTO_E_SOCKET`,
+`PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or
+`PROTO_E_LISTEN`. The allowlist, handler and bind address are checked
+first, before the port is bound, so a misconfigured server fails at startup
+instead of rejecting every connection.
 
 **When not to use it:** threads instead of forks, event loops, several
 authorized keys, pre-auth connection logging, or non-TCP transports — write
@@ -896,8 +931,15 @@ int main(void) {
     if (proto_init() != 0) return 1;
     char allowed[AUTH_PK_LEN * 2 + 1];
     if (proto_load_pubkey_hex("auth.pub", allowed, sizeof allowed) != 0) return 1;
-    return proto_serve(5000, allowed, on_client, "/var/lib/app/data.db");
+    return proto_serve(5000, allowed, on_client, "/var/lib/app/data.db", NULL);
 }
+```
+
+Behind a reverse proxy or an SSH tunnel, listen on loopback only:
+
+```c
+proto_serve_opts_t opts = { .bind_addr = "127.0.0.1" };
+return proto_serve(5000, allowed, on_client, "/var/lib/app/data.db", &opts);
 ```
 
 ---
@@ -1285,7 +1327,7 @@ int main(void) {
         return 1;
 
     printf("vault-server listening on %d\n", VAULT_PORT);
-    return proto_serve(VAULT_PORT, allowed, on_client, "vault.db");
+    return proto_serve(VAULT_PORT, allowed, on_client, "vault.db", NULL);
 }
 ```
 

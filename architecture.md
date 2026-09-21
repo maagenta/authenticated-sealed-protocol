@@ -175,13 +175,23 @@ the primitive — because the server's turnkey wrapper is the next module.
 ### `serve.h` / `serve.c` — server harness
 
 The only server-only file, and the only one that knows about `fork`. One
-function and one type:
+function and two types:
 
 - **`proto_handler_fn`** — the contract for an application's per-connection
   handler (authenticated fd + identity + opaque ctx, running in a child
   process).
+- **`proto_serve_opts_t`** — deployment options, passed by pointer; `NULL`
+  means all defaults. Today one field, `bind_addr`.
 - **`proto_serve`** — bind/listen, `SIGPIPE`/`SIGCHLD` handling, then
   accept → fork → `proto_auth_server` → handler, forever.
+
+The options are a struct rather than extra parameters for the usual reason:
+a field can be added without changing the signature, and a designated
+initializer that names one field leaves the rest zero, which the library
+reads as "default". Only deployment decisions belong in it — things decided
+when a server is started, like which interface it listens on. Build-time
+policy such as the timeouts stays out: a project sets those once, with `-D`
+in its Makefile, and does not want to repeat them at every call.
 
 Socket housekeeping lives here because this module owns these sockets, but it
 is deliberately minimal: `SO_REUSEADDR` on the listener, and nothing on the

@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 static void reap_children(int sig) {
     (void)sig;
@@ -17,13 +18,22 @@ static void reap_children(int sig) {
 }
 
 int proto_serve(int port, const char *allowed_hex,
-                proto_handler_fn handler, void *ctx) {
+                proto_handler_fn handler, void *ctx,
+                const proto_serve_opts_t *opts) {
     /* A server with no allowlist, a malformed one, or no handler can never
      * serve anyone: refuse to start rather than bind a port and fail every
      * connection. */
     if (!allowed_hex) return PROTO_E_NO_ALLOWLIST;
     if (strlen(allowed_hex) != AUTH_PK_LEN * 2) return PROTO_E_BAD_ALLOWLIST;
     if (!handler) return PROTO_E_NO_HANDLER;
+
+    /* Parse the bind address up front, with the other caller mistakes: a
+     * typo in a config file should fail here, not after the port is half
+     * set up. NULL opts, or a NULL field, means the default. */
+    struct in_addr bind_addr = { .s_addr = htonl(INADDR_ANY) };
+    if (opts && opts->bind_addr
+        && inet_pton(AF_INET, opts->bind_addr, &bind_addr) != 1)
+        return PROTO_E_BAD_ADDRESS;
 
     int rc = proto_init();
     if (rc != PROTO_OK) return rc;
@@ -43,9 +53,9 @@ int proto_serve(int port, const char *allowed_hex,
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons((uint16_t)port);
+    addr.sin_family = AF_INET;
+    addr.sin_addr   = bind_addr;
+    addr.sin_port   = htons((uint16_t)port);
 
     if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         /* Capture errno before close(), which may overwrite it. The two
