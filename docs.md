@@ -18,6 +18,7 @@ Complete reference for the `proto` library. For the design rationale see
 - [Module `wire` — framing](#module-wire--framing)
   - [`proto_send_line`](#proto_send_line)
   - [`proto_recv_line`](#proto_recv_line)
+  - [`proto_recv_line_timeout`](#proto_recv_line_timeout)
   - [`proto_recv_line_dyn`](#proto_recv_line_dyn)
   - [`proto_send_prefixed`](#proto_send_prefixed)
   - [`proto_keepalive`](#proto_keepalive)
@@ -143,11 +144,29 @@ Notes:
 |---|---|---|
 | `CHALLENGE_LEN` | 32 | Bytes of random challenge in the handshake. |
 | `MAX_LINE` | 16384 | Suggested buffer size for **control** lines (handshake, `OK`/`FAIL`, headers). Not a payload limit — payload lines should be read with `proto_recv_line_dyn`. |
+| `HANDSHAKE_TIMEOUT_MS` | 10000 | Deadline for each line of the handshake, on both ends. A peer that connects and goes silent fails the handshake after this long instead of holding a client, or a forked server child, forever. Overridable — see below. |
+| `QUIT_TIMEOUT_MS` | 2000 | How long `proto_close` waits for `BYE` after sending `QUIT`. The socket is closed either way; this only bounds the courtesy. Overridable — see below. |
 | `AUTH_PK_LEN` | `crypto_sign_PUBLICKEYBYTES` (32) | Ed25519 public key size. Identity hex buffers need `AUTH_PK_LEN * 2 + 1`. |
 | `AUTH_SK_LEN` | `crypto_sign_SECRETKEYBYTES` (64) | Ed25519 secret key size. |
 | `AUTH_SIG_LEN` | `crypto_sign_BYTES` (64) | Detached signature size. |
 | `ENC_PK_LEN` | `crypto_box_PUBLICKEYBYTES` (32) | X25519 public key size. |
 | `ENC_SK_LEN` | `crypto_box_SECRETKEYBYTES` (32) | X25519 secret key size. |
+
+**Overriding the timeouts.** The two timeouts are build-time policy, not
+runtime configuration: the right values depend on the deployment (LAN vs.
+mobile links, how patient a server should be with strangers), and that is a
+decision of the project that links the library, not of the library. Both are
+wrapped in `#ifndef`, so a consuming application sets its own from its
+Makefile — or any `-D` on the compiler line — without editing `protocol.h`:
+
+```make
+# in the consuming project's Makefile
+CFLAGS += -DHANDSHAKE_TIMEOUT_MS=30000 -DQUIT_TIMEOUT_MS=500
+```
+
+The values in `protocol.h` are the defaults, used only when the build says
+nothing. Every source file must see the same value: put the `-D` in the
+`CFLAGS` used for the whole build, not on a single object.
 
 `protocol.h` also documents the shared handshake wire format (see
 [appendix](#wire-protocol-appendix)).
@@ -267,6 +286,7 @@ the sign rule and the successes.
 | `PROTO_E_READ` | `-602` | `read()` failed | `proto_recv_line` |
 | `PROTO_E_PEER_CLOSED` | `-603` | the peer closed the connection | `proto_recv_line` |
 | `PROTO_E_LINE_TOO_LONG` | `-604` | the line did not fit; the rest is still unread | `proto_recv_line` |
+| `PROTO_E_TIMEOUT` | `-605` | the deadline passed before the whole line arrived | `proto_recv_line_timeout`; surfaces from `proto_connect` and `proto_auth_client` when the server goes silent mid-handshake |
 
 **Handshake, client side**
 
@@ -407,6 +427,43 @@ if (proto_recv_line(fd, reply, sizeof reply) < 0) goto disconnected;
 if (strncmp(reply, "OK", 2) != 0) goto server_said_no;
 ```
 
+### `proto_recv_line_timeout`
+
+```c
+int proto_recv_line_timeout(int fd, char *buf, size_t bufsz, int ms);
+```
+
+[`proto_recv_line`](#proto_recv_line) with a deadline. If the whole line has
+not arrived within `ms` milliseconds the call gives up with
+`PROTO_E_TIMEOUT`; everything else — parameters, return values, the
+too-long pitfall — is as for `proto_recv_line`.
+
+| Param | Description |
+|---|---|
+| `fd`, `buf`, `bufsz` | as for `proto_recv_line` |
+| `ms` | deadline in milliseconds for the **whole line**; `< 0` means no deadline (identical to `proto_recv_line`) |
+
+The deadline is per line, not per byte: it is set once when the call starts
+and checked before every read, so a peer trickling one byte at a time cannot
+stretch it. A signal that interrupts the wait resumes it with the time that
+remains. On timeout `buf` holds whatever arrived so far, NUL-terminated, and
+the bytes after it are still in the socket — the stream is no longer at a
+line boundary, so the sensible reaction is to close the connection.
+
+This is what bounds the handshake: every handshake read in `auth` uses it
+with [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh), and `proto_close` uses
+it with `QUIT_TIMEOUT_MS`. Applications may use it for their own commands
+where a silent peer must not block a thread or a forked child; for a peer
+that has *vanished* rather than gone quiet, see
+[`proto_keepalive`](#proto_keepalive) — the two detect different things.
+
+```c
+char reply[MAX_LINE];
+int rc = proto_recv_line_timeout(fd, reply, sizeof reply, 5000);
+if (rc == PROTO_E_TIMEOUT) goto peer_too_slow;
+if (rc < 0)                goto disconnected;
+```
+
 ### `proto_recv_line_dyn`
 
 ```c
@@ -494,7 +551,11 @@ value; `PROTO_E_KEEPALIVE` if the socket refused probing altogether.
 **Not a read timeout.** This is a backstop against blocking forever, not a way
 to give up promptly — it says nothing about how long *you* wait for a reply.
 Reads stay plain and blocking: no `SO_RCVTIMEO`, no `errno` inspection, no
-partial-line hazard.
+partial-line hazard. Keepalive detects a peer that *vanished* (host gone,
+cable cut); a peer that is alive but *silent* answers every probe and is
+never flagged. For that case use
+[`proto_recv_line_timeout`](#proto_recv_line_timeout), which is what the
+library itself does during the handshake.
 
 ```c
 /* client — this connection will sit idle, so let the kernel watch it */
@@ -508,12 +569,11 @@ static void handler(int fd, const char *identity_hex, void *ctx) {
 }
 ```
 
-**Pitfall:** `proto_serve` authenticates in a forked child *before* calling
-your handler, so enabling probing there does not cover the handshake — a peer
-that vanishes mid-`HELLO` still hangs that child. Applications that need that
-window covered run their own accept loop around
-[`proto_auth_server`](#proto_auth_server) and call this on the freshly
-accepted socket.
+**The handshake is covered separately.** `proto_serve` authenticates in a
+forked child *before* calling your handler, so probing enabled there starts
+only after the handshake. That window is bounded on its own: every handshake
+read gives up after [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh), whether
+the peer vanished or merely went quiet, so a child never outlives it.
 
 ---
 
@@ -735,9 +795,11 @@ registration. Pass it to [`proto_strerror`](#error-codes) for the message.
 void proto_close(proto_conn_t *conn);
 ```
 
-Graceful shutdown: sends `QUIT`, waits for the `BYE`, closes the socket, sets
-`conn->fd = -1`. Safe to call on an already-closed conn (no-op when
-`fd < 0`).
+Graceful shutdown: sends `QUIT`, waits up to
+[`QUIT_TIMEOUT_MS`](#constants-protocolh) for the `BYE`, closes the socket,
+sets `conn->fd = -1`. The wait is a courtesy: a server that never answers,
+or one to which `QUIT` cannot even be sent, does not delay the close beyond
+that bound. Safe to call on an already-closed conn (no-op when `fd < 0`).
 
 ### `proto_auth_client`
 
@@ -754,7 +816,9 @@ already-connected fd, and stops at the server's verdict.
   wants your enc pubkey next — send `REGISTER <b64(enc_pk)>` and expect `OK`)
 - a negative code — `PROTO_E_UNEXPECTED_REPLY` if the server did not answer
   `CHALLENGE`, `PROTO_E_BAD_CHALLENGE` if that line was malformed,
-  `PROTO_E_REJECTED` if the server declined (a `FAIL …` line), or a
+  `PROTO_E_REJECTED` if the server declined (a `FAIL …` line),
+  `PROTO_E_TIMEOUT` if the server went silent for longer than
+  [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh) on any line, or another
   transport code from the underlying read or write
 
 Use when you manage the socket yourself (custom transport, proxy, test
@@ -779,7 +843,9 @@ client's signature, and compares the client's identity against
 `NULL` on failure. On every failure path a descriptive `FAIL <reason>` line
 has already been sent to the peer (`expected HELLO`, `invalid public key`,
 `signature verification failed`, `access denied`, …), so the caller just
-closes the socket.
+closes the socket. Each read waits at most
+[`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh): a peer that connects and
+says nothing gets `NULL` after that, not a caller blocked for good.
 
 Note the returned identity always equals `allowed_hex` in the current
 single-user model; it is returned (rather than a bool) so multi-user

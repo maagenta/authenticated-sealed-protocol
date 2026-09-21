@@ -13,8 +13,10 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
     char line[MAX_LINE];
     int rc;
 
+    /* Every handshake read is bounded: a server that accepted the connection
+     * and then went silent must not hold the client past HANDSHAKE_TIMEOUT_MS. */
     if ((rc = proto_send_line(fd, "HELLO")) < 0) return rc;
-    if ((rc = proto_recv_line(fd, line, sizeof(line))) < 0) return rc;
+    if ((rc = proto_recv_line_timeout(fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS)) < 0) return rc;
     if (strncmp(line, "CHALLENGE ", 10) != 0) return PROTO_E_UNEXPECTED_REPLY;
 
     unsigned char challenge[CHALLENGE_LEN];
@@ -40,7 +42,7 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
     char cmd[MAX_LINE];
     snprintf(cmd, sizeof(cmd), "AUTH %s %s", pk_b64, sig_b64);
     if ((rc = proto_send_line(fd, cmd)) < 0) return rc;
-    if ((rc = proto_recv_line(fd, line, sizeof(line))) < 0) return rc;
+    if ((rc = proto_recv_line_timeout(fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS)) < 0) return rc;
 
     if (strcmp(line, "REGISTER") == 0) return PROTO_REGISTER_REQUESTED;
     if (strcmp(line, "OK") == 0)       return PROTO_OK;
@@ -85,7 +87,7 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
         snprintf(reg, sizeof(reg), "REGISTER %s", epk_b64);
         char line[MAX_LINE];
         if ((rc = proto_send_line(conn->fd, reg)) < 0) goto fail;
-        if ((rc = proto_recv_line(conn->fd, line, sizeof(line))) < 0) goto fail;
+        if ((rc = proto_recv_line_timeout(conn->fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS)) < 0) goto fail;
         if (strcmp(line, "OK") != 0) { rc = PROTO_E_REGISTER_REJECTED; goto fail; }
     }
     return PROTO_OK;
@@ -97,11 +99,16 @@ fail:
 }
 
 void proto_close(proto_conn_t *conn) {
-    if (conn->fd >= 0) {
-        proto_send_line(conn->fd, "QUIT");
-        char line[64]; proto_recv_line(conn->fd, line, sizeof(line));
-        close(conn->fd); conn->fd = -1;
+    if (conn->fd < 0) return;
+    /* The goodbye is a courtesy: wait for BYE only briefly, and not at all if
+     * QUIT could not even be sent. The close ends the connection regardless,
+     * so a server that never answers cannot hold the client here. */
+    if (proto_send_line(conn->fd, "QUIT") == PROTO_OK) {
+        char line[64];
+        proto_recv_line_timeout(conn->fd, line, sizeof(line), QUIT_TIMEOUT_MS);
     }
+    close(conn->fd);
+    conn->fd = -1;
 }
 
 char *proto_auth_server(int fd, const char *allowed_hex) {
@@ -114,7 +121,10 @@ char *proto_auth_server(int fd, const char *allowed_hex) {
         return NULL;
     }
 
-    if (proto_recv_line(fd, line, sizeof(line)) < 0) return NULL;
+    /* Every handshake read is bounded. This is what frees a forked child from
+     * a peer that connected and never spoke: after HANDSHAKE_TIMEOUT_MS the
+     * read fails, the child returns, and proto_serve reaps it. */
+    if (proto_recv_line_timeout(fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS) < 0) return NULL;
     if (strcmp(line, "HELLO") != 0) {
         proto_send_line(fd, "FAIL expected HELLO"); return NULL;
     }
@@ -130,7 +140,7 @@ char *proto_auth_server(int fd, const char *allowed_hex) {
     snprintf(resp, sizeof(resp), "CHALLENGE %s", ch_b64);
     if (proto_send_line(fd, resp) < 0) return NULL;
 
-    if (proto_recv_line(fd, line, sizeof(line)) < 0) return NULL;
+    if (proto_recv_line_timeout(fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS) < 0) return NULL;
     if (strncmp(line, "AUTH ", 5) != 0) {
         proto_send_line(fd, "FAIL expected AUTH"); return NULL;
     }

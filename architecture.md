@@ -103,18 +103,31 @@ can compose a better message than the library could.
 ### `wire.h` / `wire.c` — framing
 
 The lowest layer: how bytes become messages, and how long a connection may
-sit idle before the kernel checks on it. Five functions, no crypto, no
+sit idle before the kernel checks on it. Six functions, no crypto, no
 protocol knowledge, dependencies on libc only:
 
 | Function | Role |
 |---|---|
 | `proto_send_line` | write `line + '\n'` |
 | `proto_recv_line` | read one line into a fixed buffer (short control lines) |
+| `proto_recv_line_timeout` | the same, giving up when a deadline passes (a silent peer) |
 | `proto_recv_line_dyn` | read one line of unbounded size onto the heap (payload lines) |
 | `proto_send_prefixed` | write `<prefix><body>\n` without assembling a buffer (large payloads) |
 | `proto_keepalive` | enable keepalive probing on a connection and set its timing |
 
-The last one is a socket option rather than framing, and lives here because
+The timed read and the keepalive answer two different questions. Keepalive
+asks the kernel whether the peer is still *there*; a peer that is there but
+says nothing answers every probe. The timed read asks whether the peer has
+*spoken* by a deadline, and it is the one the library uses itself: every
+handshake read runs under `HANDSHAKE_TIMEOUT_MS`, and `proto_close` waits
+for `BYE` under `QUIT_TIMEOUT_MS`. Both are `#ifndef` constants in
+`protocol.h`, so a consuming project sets its own policy with `-D` from its
+Makefile and the library ships with defaults, not decisions. The deadline is
+per line, not per byte, so a peer trickling bytes cannot stretch it; the
+implementation is one `poll()` before each byte, and the plain
+`proto_recv_line` is the same code with no deadline.
+
+The keepalive is a socket option rather than framing, and lives here because
 `wire` is the lowest layer both sides link: putting it in `serve` would make
 a client pull in the server's accept loop to tune its own socket. It absorbs
 the single platform difference — the idle knob is `TCP_KEEPIDLE` on Linux and
@@ -185,12 +198,14 @@ nothing: the child is the library's, not the application's. Clients get no
 such default; `proto_connect` sets no signal disposition, and does not need
 to, because every write the library makes on their behalf is already safe.
 
-The cost is a window this module cannot delegate: `proto_serve` accepts,
-forks and runs the handshake before the handler receives the fd, so a peer
-that disappears mid-handshake leaves that child blocked in `read()` with no
-application code yet running to prevent it. Applications that need the
-handshake window covered run their own accept loop around
-`proto_auth_server` and enable probing on the socket before authenticating.
+There is one window the application cannot cover: `proto_serve` accepts,
+forks and runs the handshake before the handler receives the fd, so no
+application code is running yet when a peer disappears — or merely stays
+quiet — mid-handshake. That window is bounded by the library instead.
+Every read in `proto_auth_server` gives up after `HANDSHAKE_TIMEOUT_MS`, the
+child returns from the handshake with `NULL`, exits, and the reaper collects
+it. A stranger that connects and says nothing costs the server one child for
+ten seconds, not one child for good.
 
 It contains no application logic and no storage; it exists purely so that
 every server's `main` collapses to "load allowlist, call `proto_serve`".

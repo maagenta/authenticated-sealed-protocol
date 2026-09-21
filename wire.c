@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -61,15 +63,44 @@ static ssize_t read_byte(int fd, char *c) {
     }
 }
 
-int proto_recv_line(int fd, char *buf, size_t bufsz) {
+/* Milliseconds on a clock that never jumps, for deadlines. */
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Block until fd has data or the deadline passes. Returns 1 = readable,
+ * 0 = deadline reached, -1 = error. A signal restarts the wait with the
+ * time that remains, so the deadline holds regardless of interruptions. */
+static int wait_readable(int fd, long long deadline) {
+    for (;;) {
+        long long left = deadline - now_ms();
+        if (left <= 0) return 0;
+        struct pollfd p = { .fd = fd, .events = POLLIN };
+        int rc = poll(&p, 1, (int)left);
+        if (rc < 0 && errno == EINTR) continue;
+        return rc < 0 ? -1 : (rc > 0);
+    }
+}
+
+/* One line into buf, giving up at the deadline if there is one (0 = none).
+ * The deadline bounds the whole line, checked before every byte, so a peer
+ * trickling one byte at a time cannot hold the caller past it. */
+static int recv_line_until(int fd, char *buf, size_t bufsz, long long deadline) {
     if (bufsz == 0) return PROTO_E_PARAM;   /* no room even for the terminator */
     size_t i = 0;
     int terminated = 0;
     while (i + 1 < bufsz) {      /* leave room for '\0'; never underflows */
+        /* buf is NUL-terminated on every error path, so a caller that logs
+         * it after a failure reads a short string, not stale stack. */
+        if (deadline) {
+            int r = wait_readable(fd, deadline);
+            if (r == 0) { buf[i] = '\0'; return PROTO_E_TIMEOUT; }
+            if (r <  0) { buf[i] = '\0'; return PROTO_E_READ; }
+        }
         char c;
         ssize_t n = read_byte(fd, &c);
-        /* buf is NUL-terminated even on the error paths, so a caller that
-         * logs it after a failure reads a short string, not stale stack. */
         if (n == 0) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
         if (n <  0) { buf[i] = '\0'; return PROTO_E_READ; }
         if (c == '\n') { terminated = 1; break; }
@@ -82,6 +113,14 @@ int proto_recv_line(int fd, char *buf, size_t bufsz) {
      * returning a length that looks like a complete read. */
     if (!terminated) return PROTO_E_LINE_TOO_LONG;
     return (int)i;
+}
+
+int proto_recv_line(int fd, char *buf, size_t bufsz) {
+    return recv_line_until(fd, buf, bufsz, 0);
+}
+
+int proto_recv_line_timeout(int fd, char *buf, size_t bufsz, int ms) {
+    return recv_line_until(fd, buf, bufsz, ms < 0 ? 0 : now_ms() + ms);
 }
 
 char *proto_recv_line_dyn(int fd) {

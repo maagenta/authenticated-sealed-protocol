@@ -22,6 +22,12 @@ int proto_send_line(int fd, const char *line);
  * did not fit. buf is NUL-terminated even on the error paths. */
 int proto_recv_line(int fd, char *buf, size_t bufsz);
 
+/* Like proto_recv_line, but gives up with PROTO_E_TIMEOUT if the whole line
+ * has not arrived within ms milliseconds. The deadline covers the line, not
+ * each byte, so a peer trickling one byte at a time cannot stretch it.
+ * ms < 0 means no deadline. */
+int proto_recv_line_timeout(int fd, char *buf, size_t bufsz, int ms);
+
 /* Read one line of arbitrary length (heap-allocated, NUL-terminated).
  * Caller frees. Blocks until a line arrives; a signal does not interrupt it.
  * Returns NULL on error/EOF. Use for variable/large payloads. */

@@ -2,13 +2,13 @@
 
 ## v1.1 — Error codes, keepalive and fixes [Unreleased]
 
-Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and seven defects carried over from v1.0 are fixed.
+Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and eight defects carried over from v1.0 are fixed.
 
 **Consuming projects must add `status.c` to their source list.** That is the only breaking change — existing C code compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
 
 ### Error codes
 
-New module `status` — the `proto_status_t` enum (31 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
+New module `status` — the `proto_status_t` enum (32 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
 
 - **`rc < 0` means failure, always.** Failures are negative; success is `0` or positive. `proto_recv_line` returns a line length, `proto_auth_client` returns `PROTO_REGISTER_REQUESTED` when the server wants our encryption key, and `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works but a timing knob kept the system value. Adopting the codes costs a recompile, not an audit.
 - **The library stopped printing.** `crypto.c` used to write "Error: could not open …" to `stderr`, deciding for every consumer where its diagnostics appeared — useless to a daemon with structured logging or to a GUI. The reason now travels in the return value and the application formats it.
@@ -20,12 +20,12 @@ Failure values are grouped in hundreds by family — `-1xx` caller mistakes, `-2
 
 ### Keepalive
 
-`wire` grows from four functions to five: `proto_keepalive(fd, idle_s, intvl_s, count)` turns on TCP keepalive probing for a connection and sets its timing. Any argument `<= 0` leaves that knob at the system default.
+`wire` grows from four functions to six. `proto_keepalive(fd, idle_s, intvl_s, count)` turns on TCP keepalive probing for a connection and sets its timing; any argument `<= 0` leaves that knob at the system default. `proto_recv_line_timeout(fd, buf, bufsz, ms)` is `proto_recv_line` with a deadline, described under Fixes below, where it earns its place.
 
 A peer that vanishes without closing — a suspended laptop, a phone off the network — sends nothing, so the other side blocks in `read()` indefinitely. On a forking server that leaves a child alive forever, holding a socket and whatever per-connection state the application keeps. Keepalive makes the kernel probe an idle connection and fail the socket when the peer stops answering, which ends the read and lets the existing teardown path run.
 
 - **Nothing is on by default.** `proto_connect` and `proto_serve` set no keepalive; a connection behaves exactly as in v1.0 until an application asks otherwise. One rule for both ends, and no policy imposed on a consumer that did not want it. Clients call it on `conn.fd` after connecting, servers on the handler's fd.
-- **Known limitation: the handshake window.** `proto_serve` accepts, forks and authenticates before the application sees the fd, so a peer that vanishes mid-handshake still leaves that child blocked in `read()`. Applications that need that window covered run their own accept loop around `proto_auth_server` and enable probing on the socket themselves.
+- **The handshake needs no keepalive.** `proto_serve` accepts, forks and authenticates before the application sees the fd, so probing enabled in a handler starts after the handshake. That window is bounded by the handshake timeout instead (see Fixes), whether the peer vanished or merely went quiet.
 - **The platform difference lives in the library.** The first knob is spelled `TCP_KEEPIDLE` on Linux and `TCP_KEEPALIVE` on macOS; `proto_keepalive` absorbs that `#ifdef` so consumers do not repeat it. The other two (`TCP_KEEPINTVL`, `TCP_KEEPCNT`) are spelled the same everywhere.
 - **Not a read timeout.** It does not touch read semantics: no `SO_RCVTIMEO`, no partial-line hazard. Detection takes about two hours at system defaults — a backstop against blocking forever, not a way to give up promptly.
 - **The kernel handles both sides.** Probes are answered by the peer's TCP stack, so no application, on either end, needs to know or be updated. Nothing is added to the wire protocol: a v1.0 peer interoperates unchanged.
@@ -39,8 +39,9 @@ A peer that vanishes without closing — a suspended laptop, a phone off the net
 - **Short writes reported as failures.** `write()` may transfer fewer bytes than asked; `proto_send_line` and `proto_send_prefixed` treated that as an error with part of the line already on the wire, leaving the stream desynchronized. Both now resume until everything is sent, so they either deliver the whole line or fail on a real connection error.
 - **Signals aborted reads.** A signal arriving during a blocked `read()` returns `EINTR` with nothing consumed; the library reported it as `PROTO_E_READ` and lost the line that arrived a moment later. Reads and writes now retry on `EINTR`. The consequence — a handler alone cannot cancel a blocked read; `shutdown()` on the fd can — is documented in the FAQ.
 - **SIGPIPE killed clients.** Writing to a peer that had closed raised `SIGPIPE`, whose default action terminates the process before `write()` can return, so the `PROTO_E_WRITE` path never ran and a client lost whatever it was doing. `proto_serve` had always ignored the signal process-wide; `proto_connect` never did. The library's writes now use `send()` with `MSG_NOSIGNAL`, per call, so a dead peer surfaces as `PROTO_E_WRITE` on either end without the library deciding the process's signal disposition.
+- **Silent peers held server children forever.** Every handshake read blocked with no deadline, so anything that opened a TCP connection and sent nothing — a port scanner, a health check, a client that crashed after `connect()` — left a forked child in `read()` for good, and keepalive cannot help, because a silent peer that is still there answers every probe. Five such connections cost five immortal processes. Each handshake read now runs under `HANDSHAKE_TIMEOUT_MS` (10 s) via the new `proto_recv_line_timeout`, and fails with `PROTO_E_TIMEOUT` when it passes; the child returns and is reaped. The same bound protects a client whose server accepted and went quiet, and `proto_close` waits at most `QUIT_TIMEOUT_MS` (2 s) for `BYE` rather than indefinitely. Both constants are `#ifndef` defaults in `protocol.h`: a consuming project sets its own with `-DHANDSHAKE_TIMEOUT_MS=…` in its Makefile, without editing the library.
 
-Documentation: `docs.md` gains an "Error codes" section and a reference entry for `proto_keepalive`, and every `Returns` line lists its codes; `architecture.md` documents the new module and why the library does not print.
+Documentation: `docs.md` gains an "Error codes" section, reference entries for `proto_keepalive` and `proto_recv_line_timeout`, a note on overriding the timeouts from a consuming Makefile, and every `Returns` line lists its codes; `architecture.md` documents the new module and why the library does not print.
 
 ## v1.0 — Extraction (e33b181) [2026-07-03]
 

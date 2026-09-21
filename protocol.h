@@ -10,6 +10,30 @@
 #define CHALLENGE_LEN     32
 #define MAX_LINE          16384
 
+/*
+ * Timeouts. Both are build-time policy: a consuming project overrides them
+ * from its own Makefile without touching this file, e.g.
+ *
+ *     CFLAGS += -DHANDSHAKE_TIMEOUT_MS=30000 -DQUIT_TIMEOUT_MS=500
+ *
+ * The #ifndef makes the values here the defaults, used only when the build
+ * says nothing.
+ */
+
+/* Bound on each handshake line, on either end. Three tiny round trips:
+ * generous for a client on a poor link, short for a peer that connected
+ * and went quiet. */
+#ifndef HANDSHAKE_TIMEOUT_MS
+#define HANDSHAKE_TIMEOUT_MS  10000
+#endif
+
+/* Courtesy wait for BYE after QUIT. The close that follows ends the
+ * connection regardless, so this only bounds how long a polite goodbye
+ * may take. */
+#ifndef QUIT_TIMEOUT_MS
+#define QUIT_TIMEOUT_MS        2000
+#endif
+
 /* libsodium key sizes */
 #define AUTH_PK_LEN       crypto_sign_PUBLICKEYBYTES   /* 32 bytes Ed25519 */
 #define AUTH_SK_LEN       crypto_sign_SECRETKEYBYTES   /* 64 bytes Ed25519 */
