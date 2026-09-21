@@ -2,7 +2,7 @@
 #define PROTO_WIRE_H
 
 #include <stddef.h>
-#include "error.h"
+#include "status.h"
 
 /*
  * Line-oriented framing over a connected socket.

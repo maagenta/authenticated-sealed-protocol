@@ -2,7 +2,7 @@
 #define PROTO_AUTH_H
 
 #include "crypto.h"
-#include "error.h"
+#include "status.h"
 
 /* An authenticated client session. */
 typedef struct {

@@ -4,7 +4,7 @@
 #include <sodium.h>
 #include <stddef.h>
 #include "protocol.h"
-#include "error.h"
+#include "status.h"
 
 /* Identity (Ed25519) + encryption (X25519) keypairs. */
 typedef struct {

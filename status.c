@@ -1,4 +1,4 @@
-#include "error.h"
+#include "status.h"
 
 const char *proto_strerror(int err) {
     switch (err) {

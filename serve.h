@@ -1,7 +1,7 @@
 #ifndef PROTO_SERVE_H
 #define PROTO_SERVE_H
 
-#include "error.h"
+#include "status.h"
 
 /*
  * Server-side connection handler. Called in a forked child once per
