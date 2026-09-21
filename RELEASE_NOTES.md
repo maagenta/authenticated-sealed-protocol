@@ -4,11 +4,11 @@
 
 Three things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, and four defects carried over from v1.0 are fixed.
 
-**Consuming projects must add `error.c` to their source list.** That is the only breaking change — existing C code compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
+**Consuming projects must add `status.c` to their source list.** That is the only breaking change — existing C code compiles and behaves the same, because every error code is negative and the old `rc < 0` / `rc != 0` tests still hold.
 
 ### Error codes
 
-New module `error` — the `proto_err_t` enum (31 values) and `proto_strerror()`, which turns any of them into a sentence.
+New module `status` — the `proto_status_t` enum (31 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
 
 - **`rc < 0` means failure, always.** Failures are negative; success is `0` or positive. `proto_recv_line` returns a line length, `proto_auth_client` returns `PROTO_REGISTER_REQUESTED` when the server wants our encryption key, and `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works but a timing knob kept the system value. Adopting the codes costs a recompile, not an audit.
 - **The library stopped printing.** `crypto.c` used to write "Error: could not open …" to `stderr`, deciding for every consumer where its diagnostics appeared — useless to a daemon with structured logging or to a GUI. The reason now travels in the return value and the application formats it.
@@ -16,7 +16,7 @@ New module `error` — the `proto_err_t` enum (31 values) and `proto_strerror()`
 - **`bind` failures are classified.** `PROTO_E_PORT_IN_USE` and `PROTO_E_PERM_DENIED` come from reading `errno` before `close()` can clobber it — between them they cover almost every real startup failure.
 - **EOF is distinguishable from an error.** `PROTO_E_PEER_CLOSED` for a clean close, `PROTO_E_READ` for a failed read.
 
-Numbering is sequential with no structure encoded in the value; the name says which family a code belongs to. Values are stable from this release on. Every code has a message, and `proto_strerror` answers for unknown values too, so any return value can be passed straight through.
+Failure values are grouped in hundreds by family — `-1xx` caller mistakes, `-2xx` resources, `-3xx` key files, `-4xx` cryptography, `-5xx` sockets, `-6xx` lines, `-7xx` handshake — sequential within each range and never reused, so the documented tables stay ordered as codes are added. Values are stable from this release on. Every code has a message, and `proto_strerror` answers for unknown values too, so any return value can be passed straight through.
 
 ### Keepalive
 

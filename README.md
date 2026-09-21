@@ -40,7 +40,7 @@ consuming project's Makefile:
 CFLAGS  = -Wall -Wextra -O2 -I..           # so "protocol/xxx.h" resolves
 LDFLAGS = -lsodium
 SRCS    = main.c \
-          ../protocol/error.c ../protocol/wire.c ../protocol/crypto.c \
+          ../protocol/status.c ../protocol/wire.c ../protocol/crypto.c \
           ../protocol/auth.c ../protocol/serve.c
 ```
 
@@ -140,7 +140,7 @@ int main(void) {
 | File | Purpose |
 |---|---|
 | `protocol.h` | Shared constants (key sizes, `MAX_LINE`, `CHALLENGE_LEN`) and the wire-format spec |
-| `error.h` / `error.c` | Error codes returned by every function, and `proto_strerror()` to describe them |
+| `status.h` / `status.c` | Status codes returned by every function — failures and the few informative successes — and `proto_strerror()` to describe them |
 | `wire.h` / `wire.c` | Line framing: send/receive `\n`-terminated lines, fixed or dynamic buffers; optional keepalive |
 | `crypto.h` / `crypto.c` | Keypairs (`proto_keys_t`), key loading, sealed-box encrypt/decrypt, challenge sign/verify |
 | `auth.h` / `auth.c` | Client session (`proto_conn_t`, `proto_connect`, `proto_close`) and the handshake primitives for both sides |

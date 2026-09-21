@@ -9,6 +9,7 @@ Complete reference for the `proto` library. For the design rationale see
 - [Conventions](#conventions)
 - [Key files & formats](#key-files--formats)
 - [Constants (`protocol.h`)](#constants-protocolh)
+- [Status codes](#status-codes)
 - [Error codes](#error-codes)
 - [Types](#types)
   - [`proto_keys_t`](#proto_keys_t)
@@ -49,14 +50,11 @@ Complete reference for the `proto` library. For the design rationale see
 ## Conventions
 
 **Return values.**
-- Functions returning `int`: `PROTO_OK` (`0`) = success, a negative
-  [error code](#error-codes) = failure. Every code is negative, so the older
-  `rc < 0` and `rc != 0` tests still work; read the code only when you want
-  the reason.
-- Success is `0` **or positive**: `proto_recv_line` returns the line length,
-  `proto_auth_client` returns `PROTO_REGISTER_REQUESTED`, and
-  `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works
-  but its timing did not take. `rc < 0` therefore always means failure.
+- Functions returning `int` report a [status code](#status-codes): negative
+  = failure, `PROTO_OK` (`0`) = success, positive = success with something
+  to act on. Test with `rc < 0`, which always means failure; `rc != 0` is
+  safe only on functions that never return a positive. The negative values
+  are the [error codes](#error-codes).
 - Functions returning a pointer: non-`NULL` = success, `NULL` = failure.
   These carry no code — `proto_auth_server` reports the reason to the peer as
   a `FAIL` line instead.
@@ -153,102 +151,125 @@ Sealed-box overhead (from libsodium, used in buffer math):
 
 ---
 
-## Error codes
+## Status codes
 
-`#include "error.h"` — the `proto_err_t` enum and one function.
+`#include "status.h"` — the `proto_status_t` enum and one function.
 
 ```c
-const char *proto_strerror(int err);
+const char *proto_strerror(int code);
 ```
 
-Every failing `int`-returning function returns one of these. Failures are all
-negative and assigned sequentially; the number itself carries no structure,
-the name and the group say what it means. Treat the values as opaque and
-compare against the names.
+Every `int`-returning function reports how the call ended with one of these
+values. The rule is the sign:
 
-**Success values** are `0` or positive, so `rc < 0` always means "something
-failed" and never anything else:
+- **Negative** — the call failed. These are the [error codes](#error-codes),
+  listed in the next section.
+- **`0`** — `PROTO_OK`: success, nothing else to report.
+- **Positive** — success, with something the caller may want to act on.
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_OK` | success, nothing else to report | everything |
-| `PROTO_REGISTER_REQUESTED` | authenticated; the server wants our encryption public key | `proto_auth_client` |
-| `PROTO_KEEPALIVE_DEFAULTED` | probing is on, but a timing knob kept the system value | `proto_keepalive` |
+So `rc < 0` always means failure and is the test to reach for. `rc != 0` is
+safe only on functions that never return a positive — three do, below.
+
+Failure values are grouped in hundreds: the hundreds digit is the family
+(`-1xx` caller mistakes, `-2xx` resources, `-3xx` key files, and so on, in
+the order of the tables below), the rest is sequential within it, and a
+value is never reused. A new code joins its family's range, so these tables
+stay ordered as the library grows. Compare against the names in code, and
+use the value to look up what a logged code meant.
+
+**Positive statuses**
+
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_REGISTER_REQUESTED` | `1` | authenticated; the server wants our encryption public key | `proto_auth_client` |
+| `PROTO_KEEPALIVE_DEFAULTED` | `2` | probing is on, but a timing knob kept the system value | `proto_keepalive` |
+
+`proto_recv_line` also returns a positive on success — the line length —
+without a named constant.
 
 **The library never prints.** `proto_strerror` gives you the text and your
 application decides where it goes — stderr, syslog, a log file, a dialog:
 
 ```c
 int rc = proto_serve(5000, allowed, on_client, &db);
-if (rc != PROTO_OK)
+if (rc < 0)
     my_log(LOG_ERR, "server: %s", proto_strerror(rc));   /* "port already in use" */
 ```
 
-`proto_strerror` never returns `NULL`; an unrecognized value yields
-`"unknown error"`, so it is safe to pass any return value straight through.
+`proto_strerror` never returns `NULL`. It describes the successes too, and an
+unrecognized value yields `"unknown status code"`, so any return value can be
+passed straight through.
+
+---
+
+## Error codes
+
+The negative members of `proto_status_t`, grouped by what went wrong. Each
+is returned by the functions listed; see [Status codes](#status-codes) for
+the sign rule and the successes.
 
 **Caller mistakes**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_PARAM` | invalid argument | `proto_recv_line` with `bufsz == 0` |
-| `PROTO_E_BUFFER_TOO_SMALL` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
-| `PROTO_E_NO_ALLOWLIST` | `allowed_hex` is `NULL` | `proto_serve` |
-| `PROTO_E_BAD_ALLOWLIST` | `allowed_hex` is not 64 hex chars | `proto_serve` |
-| `PROTO_E_NO_HANDLER` | `handler` is `NULL` | `proto_serve` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0` |
+| `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
+| `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
+| `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 hex chars | `proto_serve` |
+| `PROTO_E_NO_HANDLER` | `-105` | `handler` is `NULL` | `proto_serve` |
 
 **Resources and initialization**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_NOMEM` | allocation failed | `proto_seal` |
-| `PROTO_E_SODIUM` | `sodium_init()` failed | `proto_init`, `proto_connect`, `proto_serve` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_NOMEM` | `-201` | allocation failed | `proto_seal` |
+| `PROTO_E_SODIUM` | `-202` | `sodium_init()` failed | `proto_init`, `proto_connect`, `proto_serve` |
 
 **Key files**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_KEY_OPEN` | could not open the file | `proto_load_keys`, `proto_load_pubkey_hex` |
-| `PROTO_E_KEY_EMPTY` | file is empty | idem |
-| `PROTO_E_KEY_FORMAT` | not base64 of the expected size | idem |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_KEY_OPEN` | `-301` | could not open the file | `proto_load_keys`, `proto_load_pubkey_hex` |
+| `PROTO_E_KEY_EMPTY` | `-302` | file is empty | idem |
+| `PROTO_E_KEY_FORMAT` | `-303` | not base64 of the expected size | idem |
 
 **Cryptography**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_CRYPTO` | libsodium operation failed | `proto_seal`, `proto_sign_challenge` |
-| `PROTO_E_BAD_SIGNATURE` | signature did not verify | `proto_verify_challenge` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_CRYPTO` | `-401` | libsodium operation failed | `proto_seal`, `proto_sign_challenge` |
+| `PROTO_E_BAD_SIGNATURE` | `-402` | signature did not verify | `proto_verify_challenge` |
 
 **Sockets and addressing**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_SOCKET` | `socket()` failed | `proto_connect`, `proto_serve` |
-| `PROTO_E_RESOLVE` | `getaddrinfo()` failed | `proto_connect` |
-| `PROTO_E_CONNECT` | `connect()` failed | `proto_connect` |
-| `PROTO_E_BIND` | `bind()` failed for another reason | `proto_serve` |
-| `PROTO_E_PORT_IN_USE` | `bind()` failed with `EADDRINUSE` | `proto_serve` |
-| `PROTO_E_PERM_DENIED` | `bind()` denied — `EACCES` or `EPERM` | `proto_serve` |
-| `PROTO_E_LISTEN` | `listen()` failed | `proto_serve` |
-| `PROTO_E_KEEPALIVE` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_SOCKET` | `-501` | `socket()` failed | `proto_connect`, `proto_serve` |
+| `PROTO_E_RESOLVE` | `-502` | `getaddrinfo()` failed | `proto_connect` |
+| `PROTO_E_CONNECT` | `-503` | `connect()` failed | `proto_connect` |
+| `PROTO_E_BIND` | `-504` | `bind()` failed for another reason | `proto_serve` |
+| `PROTO_E_PORT_IN_USE` | `-505` | `bind()` failed with `EADDRINUSE` | `proto_serve` |
+| `PROTO_E_PERM_DENIED` | `-506` | `bind()` denied — `EACCES` or `EPERM` | `proto_serve` |
+| `PROTO_E_LISTEN` | `-507` | `listen()` failed | `proto_serve` |
+| `PROTO_E_KEEPALIVE` | `-508` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
 
 **Reading and writing lines**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_WRITE` | `write()` failed | `proto_send_line`, `proto_send_prefixed` |
-| `PROTO_E_READ` | `read()` failed | `proto_recv_line` |
-| `PROTO_E_PEER_CLOSED` | the peer closed the connection | `proto_recv_line` |
-| `PROTO_E_LINE_TOO_LONG` | the line did not fit; the rest is still unread | `proto_recv_line` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_WRITE` | `-601` | `write()` failed | `proto_send_line`, `proto_send_prefixed` |
+| `PROTO_E_READ` | `-602` | `read()` failed | `proto_recv_line` |
+| `PROTO_E_PEER_CLOSED` | `-603` | the peer closed the connection | `proto_recv_line` |
+| `PROTO_E_LINE_TOO_LONG` | `-604` | the line did not fit; the rest is still unread | `proto_recv_line` |
 
 **Handshake, client side**
 
-| Code | Meaning | Returned by |
-|---|---|---|
-| `PROTO_E_UNEXPECTED_REPLY` | the server said something else | `proto_auth_client` |
-| `PROTO_E_BAD_CHALLENGE` | challenge malformed or not 32 bytes | `proto_auth_client` |
-| `PROTO_E_REJECTED` | the server refused the handshake | `proto_auth_client`, `proto_connect` |
-| `PROTO_E_REGISTER_REJECTED` | the server refused our `REGISTER` | `proto_connect` |
+| Code | Value | Meaning | Returned by |
+|---|---|---|---|
+| `PROTO_E_UNEXPECTED_REPLY` | `-701` | the server said something else | `proto_auth_client` |
+| `PROTO_E_BAD_CHALLENGE` | `-702` | challenge malformed or not 32 bytes | `proto_auth_client` |
+| `PROTO_E_REJECTED` | `-703` | the server refused the handshake | `proto_auth_client`, `proto_connect` |
+| `PROTO_E_REGISTER_REJECTED` | `-704` | the server refused our `REGISTER` | `proto_connect` |
 
 ---
 
@@ -354,7 +375,7 @@ NUL-terminated.
 |---|---|
 | `fd` | connected socket |
 | `buf` | caller buffer |
-| `bufsz` | its size; must be ≥ 1, and `0` is rejected with `-1` |
+| `bufsz` | its size; must be ≥ 1, and `0` is rejected with `PROTO_E_PARAM` |
 
 **Returns** the line length (≥ 0), or a negative [code](#error-codes):
 `PROTO_E_PEER_CLOSED` if the peer closed, `PROTO_E_READ` on a socket error,
@@ -711,10 +732,13 @@ Client handshake **primitive**: runs `HELLO` → `CHALLENGE` → `AUTH` on an
 already-connected fd, and stops at the server's verdict.
 
 **Returns**
-- `0` — authenticated; server replied `OK` (known user)
-- `1` — authenticated; server replied `REGISTER` (it wants your enc pubkey
-  next — send `REGISTER <b64(enc_pk)>` and expect `OK`)
-- `-1` — failure (I/O error, malformed reply, or `FAIL …`)
+- `PROTO_OK` — authenticated; server replied `OK` (known user)
+- `PROTO_REGISTER_REQUESTED` — authenticated; server replied `REGISTER` (it
+  wants your enc pubkey next — send `REGISTER <b64(enc_pk)>` and expect `OK`)
+- a negative code — `PROTO_E_UNEXPECTED_REPLY` if the server did not answer
+  `CHALLENGE`, `PROTO_E_BAD_CHALLENGE` if that line was malformed,
+  `PROTO_E_REJECTED` if the server declined (a `FAIL …` line), or a
+  transport code from the underlying read or write
 
 Use when you manage the socket yourself (custom transport, proxy, test
 harness). `proto_connect` is this plus socket setup plus the REGISTER step.
@@ -1197,11 +1221,11 @@ LDFLAGS = -lsodium
 
 client: vault-client.c
 	$(CC) $(CFLAGS) -o vault-client vault-client.c \
-	      protocol/error.c protocol/wire.c protocol/crypto.c protocol/auth.c $(LDFLAGS)
+	      protocol/status.c protocol/wire.c protocol/crypto.c protocol/auth.c $(LDFLAGS)
 
 server: vault-server.c
 	$(CC) $(CFLAGS) -o vault-server vault-server.c \
-	      protocol/error.c protocol/wire.c protocol/crypto.c protocol/auth.c \
+	      protocol/status.c protocol/wire.c protocol/crypto.c protocol/auth.c \
 	      protocol/serve.c $(LDFLAGS)
 ```
 

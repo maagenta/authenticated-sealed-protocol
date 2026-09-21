@@ -1,7 +1,7 @@
 #include "status.h"
 
-const char *proto_strerror(int err) {
-    switch (err) {
+const char *proto_strerror(int code) {
+    switch (code) {
     case PROTO_OK:                  return "success";
     case PROTO_REGISTER_REQUESTED:  return "server requested registration";
     case PROTO_KEEPALIVE_DEFAULTED: return "keepalive on, timing left at system defaults";
@@ -13,7 +13,6 @@ const char *proto_strerror(int err) {
     case PROTO_E_NO_HANDLER:        return "no connection handler given";
 
     case PROTO_E_NOMEM:             return "out of memory";
-
     case PROTO_E_SODIUM:            return "libsodium initialization failed";
 
     case PROTO_E_KEY_OPEN:          return "could not open key file";
@@ -42,6 +41,6 @@ const char *proto_strerror(int err) {
     case PROTO_E_REJECTED:          return "server refused the handshake";
     case PROTO_E_REGISTER_REJECTED: return "server refused registration";
 
-    default:                        return "unknown error";
+    default:                        return "unknown status code";
     }
 }

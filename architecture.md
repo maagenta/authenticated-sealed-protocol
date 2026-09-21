@@ -34,21 +34,21 @@ that varies (command verbs, storage, registration policy).
             └───────┬──────┘ └─────┬────────┘
                     │              │
               ┌─────▼──────┐ ┌─────▼────────┐
-  constants   │  error     │ │  protocol.h  │
+  constants   │  status    │ │  protocol.h  │
   and codes   └────────────┘ └──────────────┘
 ```
 
 Dependencies point strictly downward — no cycles. `auth` never knows `serve`
 exists, so you can replace the harness without touching the handshake.
-`error` sits at the bottom next to `protocol.h` and depends on nothing: every
+`status` sits at the bottom next to `protocol.h` and depends on nothing: every
 layer above returns its codes.
 
 **Who links what:**
 
 | Side | Sources to compile |
 |---|---|
-| Client | `error.c wire.c crypto.c auth.c` |
-| Server | `error.c wire.c crypto.c auth.c serve.c` |
+| Client | `status.c wire.c crypto.c auth.c` |
+| Server | `status.c wire.c crypto.c auth.c serve.c` |
 
 ## What each file contains
 
@@ -70,16 +70,28 @@ Everything else includes it, directly or transitively. Deliberately contains
 **no application constants** — ports, size limits, and command sets belong to
 each consuming app.
 
-### `error.h` / `error.c` — failure vocabulary
+### `status.h` / `status.c` — outcome vocabulary
 
-The smallest module, and the only one every other links: the `proto_err_t`
-enum and `proto_strerror()`, which turns a code into a sentence.
+The smallest module, and the only one every other links: the
+`proto_status_t` enum and `proto_strerror()`, which turns a code into a
+sentence. The enum names every way a call can end — the failures, and the
+few successes that carry something the caller may act on — which is why it
+is a *status* type rather than an error type.
 
-Codes are negative so that the pre-existing `rc < 0` and `rc != 0` tests in
-consuming code keep working — adopting them costs a recompile, not an audit.
-They are numbered sequentially with no structure encoded in the value: the
-name says which family a code belongs to, and a scheme that packs a domain
-into the number would have to be maintained for no gain at this size.
+Failure codes are negative, so `rc < 0` always means failure and is the test
+to use. `rc != 0` is safe only on functions that never return a positive
+value on success; three do — `proto_recv_line` returns a length,
+`proto_auth_client` returns `PROTO_REGISTER_REQUESTED`, and `proto_keepalive`
+returns `PROTO_KEEPALIVE_DEFAULTED`. Adopting the codes costs consumers a
+recompile, not an audit.
+
+Failure values are grouped in hundreds — the hundreds digit is the family,
+the rest is sequential within it — and never reused. The grouping exists
+for the documentation, not for code: the values are published in the
+reference tables, and a new code that landed at the next free integer would
+sit far from its family and disorder the table it belongs to. With a range
+per family it joins its table in place. Code still compares against names;
+nothing parses the number.
 
 **The library does not print.** Diagnostics used to go to `stderr` from
 `crypto.c`, which decided for every consumer where its errors appeared — no
