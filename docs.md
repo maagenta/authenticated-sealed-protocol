@@ -584,7 +584,10 @@ it into a **caller-provided** buffer. Only needed when you want to control
 allocation yourself; otherwise use [`proto_seal_new`](#proto_seal_new).
 
 Required buffer size:
-`sodium_base64_ENCODED_LEN(msg_len + crypto_box_SEALBYTES, sodium_base64_VARIANT_ORIGINAL) + 1`.
+`sodium_base64_ENCODED_LEN(msg_len + crypto_box_SEALBYTES, sodium_base64_VARIANT_ORIGINAL)`.
+The macro already counts the trailing NUL — do not add 1. (This differs from
+`sodium_bin2hex`, whose size argument is `len * 2 + 1` with the NUL added by
+the caller.)
 
 **Returns** `PROTO_OK`, `PROTO_E_BUFFER_TOO_SMALL` if `out_b64_sz` is below
 the size given above, `PROTO_E_NOMEM`, or `PROTO_E_CRYPTO`. Binary-safe:

@@ -98,8 +98,11 @@ int proto_seal(const unsigned char *msg, size_t msg_len,
 char *proto_seal_new(const unsigned char *msg, size_t msg_len,
                      const unsigned char *enc_pk) {
     size_t cipher_len = msg_len + crypto_box_SEALBYTES;
+    /* ENCODED_LEN already counts the trailing NUL; proto_seal checks against
+     * the same figure, so adding 1 here would over-allocate and suggest the
+     * check is too lax. */
     size_t b64_sz = sodium_base64_ENCODED_LEN(cipher_len,
-                        sodium_base64_VARIANT_ORIGINAL) + 1;
+                        sodium_base64_VARIANT_ORIGINAL);
     char *b64 = malloc(b64_sz);
     if (!b64) return NULL;
     if (proto_seal(msg, msg_len, enc_pk, b64, b64_sz) != 0) {
@@ -114,6 +117,9 @@ unsigned char *proto_unseal_new(const char *data_b64,
                                 const unsigned char *enc_sk,
                                 size_t *out_len) {
     size_t b64_len = strlen(data_b64);
+    /* base64 is always longer than what it encodes (4 chars per 3 bytes), so
+     * the encoded length is a safe upper bound for the decoded buffer.
+     * malloc(0) is implementation-defined, hence the floor of 1. */
     unsigned char *cipher = malloc(b64_len ? b64_len : 1);
     if (!cipher) return NULL;
 

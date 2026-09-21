@@ -29,8 +29,11 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
     if ((rc = proto_sign_challenge(challenge, ch_len, keys->auth_sk, sig)) != PROTO_OK)
         return rc;
 
-    char pk_b64[sodium_base64_ENCODED_LEN(AUTH_PK_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
-    char sig_b64[sodium_base64_ENCODED_LEN(AUTH_SIG_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
+    /* sodium_base64_ENCODED_LEN already counts the trailing NUL, so it is the
+     * whole buffer size — unlike the hex buffers, where sodium_bin2hex wants
+     * len * 2 + 1 and the caller adds the NUL. Do not add 1 here. */
+    char pk_b64[sodium_base64_ENCODED_LEN(AUTH_PK_LEN, sodium_base64_VARIANT_ORIGINAL)];
+    char sig_b64[sodium_base64_ENCODED_LEN(AUTH_SIG_LEN, sodium_base64_VARIANT_ORIGINAL)];
     sodium_bin2base64(pk_b64,  sizeof(pk_b64),  keys->auth_pk, AUTH_PK_LEN,  sodium_base64_VARIANT_ORIGINAL);
     sodium_bin2base64(sig_b64, sizeof(sig_b64), sig,           AUTH_SIG_LEN, sodium_base64_VARIANT_ORIGINAL);
 
@@ -74,7 +77,7 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
     if (rc < 0) goto fail;
 
     if (rc == PROTO_REGISTER_REQUESTED) {  /* send our enc pubkey */
-        char epk_b64[sodium_base64_ENCODED_LEN(ENC_PK_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
+        char epk_b64[sodium_base64_ENCODED_LEN(ENC_PK_LEN, sodium_base64_VARIANT_ORIGINAL)];
         sodium_bin2base64(epk_b64, sizeof(epk_b64),
                           conn->keys.enc_pk, ENC_PK_LEN,
                           sodium_base64_VARIANT_ORIGINAL);
@@ -119,7 +122,7 @@ char *proto_auth_server(int fd, const char *allowed_hex) {
     unsigned char challenge[CHALLENGE_LEN];
     randombytes_buf(challenge, sizeof(challenge));
 
-    char ch_b64[sodium_base64_ENCODED_LEN(CHALLENGE_LEN, sodium_base64_VARIANT_ORIGINAL) + 1];
+    char ch_b64[sodium_base64_ENCODED_LEN(CHALLENGE_LEN, sodium_base64_VARIANT_ORIGINAL)];
     sodium_bin2base64(ch_b64, sizeof(ch_b64), challenge, CHALLENGE_LEN,
                       sodium_base64_VARIANT_ORIGINAL);
 
