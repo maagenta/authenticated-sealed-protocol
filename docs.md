@@ -334,7 +334,11 @@ authenticated successfully**.
 - `identity_hex` — the authenticated client's identity (64 hex chars). Use it
   as the user key in storage. Owned by the harness; copy if you keep it.
 - `ctx` — the opaque pointer you passed to `proto_serve` (e.g. a DB path or
-  config struct).
+  config struct). Only the address is passed, and the handler runs in a
+  forked child, so what it points to is the child's copy: changes made
+  through `ctx` do not reach the parent or other connections. State that
+  must be shared across connections needs shared memory (`mmap` with
+  `MAP_SHARED`) set up before `proto_serve` is called.
 
 When the handler returns, the child closes the socket and exits. Anything the
 handler changes in memory is lost — persist through your storage.
