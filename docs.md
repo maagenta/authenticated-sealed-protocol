@@ -73,6 +73,12 @@ Complete reference for the `proto` library. For the design rationale see
 - The library is synchronous and blocking. One `proto_conn_t` / one fd per
   connection; do not share a connection between threads. A non-blocking fd
   is outside the contract: the send path treats `EAGAIN` as a failure.
+- Blocking calls retry when a signal interrupts them, so an incidental
+  signal — `SIGCHLD` in a forking server, `SIGWINCH` in a terminal client —
+  does not turn into a spurious failure. The consequence is that a signal
+  handler alone cannot break a caller out of a blocked read; the FAQ entry
+  "My program ignores Ctrl-C while waiting for a line" shows how to cancel
+  one.
 - `proto_serve` forks one child per connection; your handler runs in the
   child. In-memory state is per-connection, not shared (see
   [architecture.md](architecture.md)).
@@ -1237,6 +1243,42 @@ buffer. Fixed-buffer reads stop at `bufsz-1` and leave the remainder in the
 socket, desynchronizing everything after. That read returns
 `PROTO_E_LINE_TOO_LONG`, so check for it — and read any line that can carry a
 payload with `proto_recv_line_dyn`.
+
+**My program ignores Ctrl-C while waiting for a line.**
+Blocking reads retry when a signal interrupts them, so setting a flag from
+the handler is not enough — the read never returns to let your loop check
+it. This bites clients waiting for a reply and server handlers waiting for
+the next command alike:
+
+```c
+static volatile sig_atomic_t stop = 0;
+static void on_int(int s) { (void)s; stop = 1; }   /* not enough on its own */
+
+while (!stop) {
+    char *line = proto_recv_line_dyn(fd);          /* still blocked */
+    ...
+}
+```
+
+Cancel the pending call by shutting the socket down from the handler.
+`shutdown()` is safe to call there, and it makes the blocked read return at
+once:
+
+```c
+static int g_fd = -1;                              /* set once connected */
+
+static void on_int(int s) {
+    (void)s;
+    stop = 1;
+    shutdown(g_fd, SHUT_RDWR);                     /* unblocks the read */
+}
+```
+
+The read then returns `PROTO_E_PEER_CLOSED` (or `NULL` from
+`proto_recv_line_dyn`) — the descriptor really is unusable at that point,
+so the code is honest. A client that would rather poll its own state while
+idle can instead wait with a bound and check the flag between waits; that is
+what `proto_wait` is for in the next release.
 
 **`proto_load_keys` returns `PROTO_E_KEY_OPEN`.**
 Key paths are resolved relative to the process working directory. Pass

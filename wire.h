@@ -15,13 +15,15 @@
 int proto_send_line(int fd, const char *line);
 
 /* Read one line into a fixed buffer (NUL-terminated, newline stripped).
- * Use for short control lines. Returns the line length, or PROTO_E_PARAM,
+ * Blocks until a line arrives; a signal does not interrupt it — see docs.md
+ * on cancelling a blocked call. Returns the line length, or PROTO_E_PARAM,
  * PROTO_E_PEER_CLOSED, PROTO_E_READ, or PROTO_E_LINE_TOO_LONG when the line
  * did not fit. buf is NUL-terminated even on the error paths. */
 int proto_recv_line(int fd, char *buf, size_t bufsz);
 
 /* Read one line of arbitrary length (heap-allocated, NUL-terminated).
- * Caller frees. Returns NULL on error/EOF. Use for variable/large payloads. */
+ * Caller frees. Blocks until a line arrives; a signal does not interrupt it.
+ * Returns NULL on error/EOF. Use for variable/large payloads. */
 char *proto_recv_line_dyn(int fd);
 
 /* Write "<prefix><body>\n" without an intermediate buffer. body may be large;

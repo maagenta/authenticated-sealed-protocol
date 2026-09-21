@@ -34,13 +34,26 @@ int proto_send_line(int fd, const char *line) {
     return write_all(fd, "\n", 1);
 }
 
+/* Read one byte, retrying when a signal interrupts the call — nothing was
+ * consumed in that case, so it is not a connection failure. The cost is that
+ * a signal handler alone cannot break a caller out of a blocked read; a
+ * shutdown() on the fd from the handler can, and surfaces as a real error.
+ * Returns 1 on a byte read, 0 at end of stream, -1 on a real error. */
+static ssize_t read_byte(int fd, char *c) {
+    for (;;) {
+        ssize_t n = read(fd, c, 1);
+        if (n < 0 && errno == EINTR) continue;
+        return n;
+    }
+}
+
 int proto_recv_line(int fd, char *buf, size_t bufsz) {
     if (bufsz == 0) return PROTO_E_PARAM;   /* no room even for the terminator */
     size_t i = 0;
     int terminated = 0;
     while (i + 1 < bufsz) {      /* leave room for '\0'; never underflows */
         char c;
-        ssize_t n = read(fd, &c, 1);
+        ssize_t n = read_byte(fd, &c);
         /* buf is NUL-terminated even on the error paths, so a caller that
          * logs it after a failure reads a short string, not stale stack. */
         if (n == 0) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
@@ -63,7 +76,7 @@ char *proto_recv_line_dyn(int fd) {
     if (!buf) return NULL;
     while (1) {
         char c;
-        if (read(fd, &c, 1) <= 0) { free(buf); return NULL; }
+        if (read_byte(fd, &c) <= 0) { free(buf); return NULL; }
         if (c == '\n') break;
         if (c == '\r') continue;
         if (i + 1 >= sz) {
