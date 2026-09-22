@@ -194,7 +194,20 @@ function and two types:
 - **`proto_serve_opts_t`** — deployment options, passed by pointer; `NULL`
   means all defaults. Today one field, `bind_addr`.
 - **`proto_serve`** — bind/listen, `SIGPIPE`/`SIGCHLD` handling, then
-  accept → fork → `proto_auth_server` → handler, forever.
+  accept → fork → `proto_auth_server` → handler, until the listening
+  socket itself fails.
+
+The loop distinguishes three kinds of `accept` failure because they call
+for three different reactions: a signal or an aborted peer is retried at
+once; running out of descriptors or memory is retried after a pause, since
+a child exiting will free what is missing and retrying at once would spin
+at full CPU on Linux; and a broken listening socket makes the function
+return `PROTO_E_ACCEPT`, because a loop that can never succeed again should
+not keep the application in the dark. A failed `fork` is not fatal either:
+the parent tells the client `FAIL server busy` and closes, which the
+client's handshake reports as a refusal. The library never decides what to
+do about any of this — retry, restart, exit — it only makes sure the
+application finds out.
 
 The options are a struct rather than extra parameters for the usual reason:
 a field can be added without changing the signature, and a designated

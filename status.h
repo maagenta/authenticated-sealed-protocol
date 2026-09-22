@@ -55,6 +55,7 @@ typedef enum {
     PROTO_E_PERM_DENIED        = -506,  /* bind() denied: EACCES or EPERM    */
     PROTO_E_LISTEN             = -507,  /* listen() failed                   */
     PROTO_E_KEEPALIVE          = -508,  /* SO_KEEPALIVE rejected: no probing */
+    PROTO_E_ACCEPT             = -509,  /* listening socket no longer usable */
 
     /* -6xx: reading and writing lines */
     PROTO_E_WRITE              = -601,  /* write() failed                    */

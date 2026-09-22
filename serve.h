@@ -33,11 +33,14 @@ typedef struct {
  * Turnkey server harness: init libsodium, ignore SIGPIPE, reap children,
  * bind/listen on port, then accept + fork per connection. Each connection is
  * authenticated against allowed_hex; handler is invoked only for authorized
- * clients. opts may be NULL for the defaults. Blocks forever on success; on
- * a fatal setup error returns PROTO_E_NO_ALLOWLIST, PROTO_E_BAD_ALLOWLIST,
+ * clients. opts may be NULL for the defaults. Returns only when it cannot
+ * serve: on a setup error, PROTO_E_NO_ALLOWLIST, PROTO_E_BAD_ALLOWLIST,
  * PROTO_E_NO_HANDLER, PROTO_E_BAD_PORT, PROTO_E_BAD_ADDRESS, PROTO_E_SODIUM,
  * PROTO_E_SOCKET, PROTO_E_PORT_IN_USE, PROTO_E_PERM_DENIED, PROTO_E_BIND or
- * PROTO_E_LISTEN.
+ * PROTO_E_LISTEN; later, PROTO_E_ACCEPT if the listening socket stops
+ * working. Running out of descriptors or processes is not fatal: accept()
+ * is retried after a pause, and a client that cannot be forked for is told
+ * "FAIL server busy" and closed.
  */
 int proto_serve(int port, const char *allowed_hex,
                 proto_handler_fn handler, void *ctx,

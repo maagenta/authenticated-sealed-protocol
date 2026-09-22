@@ -280,6 +280,7 @@ the sign rule and the successes.
 | `PROTO_E_PERM_DENIED` | `-506` | `bind()` denied — `EACCES` or `EPERM` | `proto_serve` |
 | `PROTO_E_LISTEN` | `-507` | `listen()` failed | `proto_serve` |
 | `PROTO_E_KEEPALIVE` | `-508` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
+| `PROTO_E_ACCEPT` | `-509` | `accept()` failed in a way no retry can fix: the listening socket is unusable | `proto_serve` (after startup) |
 
 **Reading and writing lines**
 
@@ -878,10 +879,13 @@ already-connected fd, and stops at the server's verdict.
 - `PROTO_OK` — authenticated; server replied `OK` (known user)
 - `PROTO_REGISTER_REQUESTED` — authenticated; server replied `REGISTER` (it
   wants your enc pubkey next — send `REGISTER <b64(enc_pk)>` and expect `OK`)
-- a negative code — `PROTO_E_UNEXPECTED_REPLY` if the server did not answer
-  `CHALLENGE`, `PROTO_E_BAD_CHALLENGE` if that line was malformed,
-  `PROTO_E_REJECTED` if the server declined (a `FAIL …` line),
-  `PROTO_E_TIMEOUT` if the server went silent for longer than
+- a negative code — `PROTO_E_REJECTED` if the server declined with a
+  `FAIL …` line at any point (after `AUTH`: unknown key, bad signature;
+  before the challenge: `FAIL server busy` when it cannot fork, or
+  `FAIL internal error` when its allowlist is unusable),
+  `PROTO_E_UNEXPECTED_REPLY` if the reply to `HELLO` was neither
+  `CHALLENGE` nor `FAIL`, `PROTO_E_BAD_CHALLENGE` if the challenge line was
+  malformed, `PROTO_E_TIMEOUT` if the server went silent for longer than
   [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh) on any line, or another
   transport code from the underlying read or write
 
@@ -935,9 +939,19 @@ The turnkey server. In one call:
 2. ignores `SIGPIPE`, installs a `SIGCHLD` reaper (no zombies),
 3. creates the listening socket (`SO_REUSEADDR`, backlog 16, on
    `opts->bind_addr` or every interface),
-4. loops forever: `accept` → `fork` → in the child, authenticate with
+4. loops: `accept` → `fork` → in the child, authenticate with
    [`proto_auth_server`](#proto_auth_server) → on success call
    `handler(fd, identity_hex, ctx)` → close and `_exit`.
+
+**Under pressure.** Running out of descriptors or processes does not stop
+the server. An `accept` that fails for lack of a descriptor or memory is
+retried after 100 ms (a child exiting frees what is missing; retrying at
+once would spin at full CPU on Linux, where the pending connection stays
+queued). A `fork` that fails answers the client `FAIL server busy` and
+closes, so the client sees a refusal it can retry, not a network error —
+the parent reads the client's `HELLO` first (waiting at most 100 ms),
+because closing with data unread would reset the connection and lose the
+reply.
 
 | Param | Description |
 |---|---|
@@ -947,14 +961,17 @@ The turnkey server. In one call:
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
 | `opts` | deployment options ([`proto_serve_opts_t`](#proto_serve_opts_t)); `NULL` for all defaults |
 
-**Returns** never on success (blocks forever); on fatal setup errors it
-returns `PROTO_E_NO_ALLOWLIST`, `PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`,
-`PROTO_E_BAD_PORT`, `PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`,
-`PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`,
-`PROTO_E_BIND` or `PROTO_E_LISTEN`. The allowlist, handler, port and bind
-address are checked first, before the port is bound, so a misconfigured
-server fails at startup instead of rejecting every connection — or, worse,
-running on a port nobody expects.
+**Returns** only when it cannot serve. At startup: `PROTO_E_NO_ALLOWLIST`,
+`PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`, `PROTO_E_BAD_PORT`,
+`PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`, `PROTO_E_SOCKET`,
+`PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or
+`PROTO_E_LISTEN`. Later: `PROTO_E_ACCEPT`, when `accept` fails in a way no
+retry can fix — the listening socket itself has become unusable — so the
+application can log it and decide, rather than the loop spinning forever
+in silence. The allowlist, handler, port and bind address are checked
+first, before the port is bound, so a misconfigured server fails at startup
+instead of rejecting every connection — or, worse, running on a port nobody
+expects.
 
 **When not to use it:** threads instead of forks, event loops, several
 authorized keys, pre-auth connection logging, or non-TCP transports — write

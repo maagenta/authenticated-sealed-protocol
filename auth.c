@@ -18,6 +18,9 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
      * and then went silent must not hold the client past HANDSHAKE_TIMEOUT_MS. */
     if ((rc = proto_send_line(fd, "HELLO")) < 0) return rc;
     if ((rc = proto_recv_line_timeout(fd, line, sizeof(line), HANDSHAKE_TIMEOUT_MS)) < 0) return rc;
+    /* A FAIL here is the server declining before the challenge — busy, or
+     * misconfigured — not a protocol violation. */
+    if (strncmp(line, "FAIL ", 5) == 0)       return PROTO_E_REJECTED;
     if (strncmp(line, "CHALLENGE ", 10) != 0) return PROTO_E_UNEXPECTED_REPLY;
 
     unsigned char challenge[CHALLENGE_LEN];

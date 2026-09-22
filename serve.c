@@ -1,11 +1,13 @@
 #include "serve.h"
 #include "auth.h"
 #include "crypto.h"
+#include "wire.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -75,9 +77,38 @@ int proto_serve(int port, const char *allowed_hex,
 
     for (;;) {
         int cli = accept(srv, NULL, NULL);
-        if (cli < 0) continue;
+        if (cli < 0) {
+            /* A signal, or a peer that gave up before we got to it: retry. */
+            if (errno == EINTR || errno == ECONNABORTED) continue;
+            /* Out of descriptors or memory. On Linux the pending connection
+             * stays queued and accept() fails again at once, so retrying
+             * without a pause is a busy loop. A child exiting frees what is
+             * missing; give it 100 ms. */
+            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS
+             || errno == ENOMEM) {
+                nanosleep(&(struct timespec){ 0, 100 * 1000000 }, NULL);
+                continue;
+            }
+            /* Anything else means the listening socket itself is unusable
+             * and no retry will change that: return so the application can
+             * decide, instead of looping forever in silence. */
+            close(srv);
+            return PROTO_E_ACCEPT;
+        }
 
         pid_t pid = fork();
+        if (pid < 0) {
+            /* No process to serve this client. Say so before closing: a bare
+             * close looks like a network failure; "busy" says try again. Its
+             * HELLO is read first — closing with data unread makes the kernel
+             * reset the connection, and the reset discards the FAIL. The
+             * wait is short: this is the accept loop. */
+            char line[MAX_LINE];
+            proto_recv_line_timeout(cli, line, sizeof line, 100);
+            proto_send_line(cli, "FAIL server busy");
+            close(cli);
+            continue;
+        }
         if (pid == 0) {
             close(srv);
             char *user = proto_auth_server(cli, allowed_hex);

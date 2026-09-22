@@ -32,6 +32,7 @@ const char *proto_strerror(int code) {
     case PROTO_E_PERM_DENIED:       return "permission denied binding port";
     case PROTO_E_LISTEN:            return "could not listen on socket";
     case PROTO_E_KEEPALIVE:         return "keepalive not supported on this socket";
+    case PROTO_E_ACCEPT:            return "accept failed; listening socket no longer usable";
 
     case PROTO_E_WRITE:             return "write failed";
     case PROTO_E_READ:              return "read failed";
