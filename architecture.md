@@ -172,6 +172,17 @@ live here so the handshake logic can never drift apart:
 Note the asymmetry: the client side has a turnkey call, the server side only
 the primitive — because the server's turnkey wrapper is the next module.
 
+A conn holds one connection, and `proto_connect` enforces it: called on a
+conn that still has a socket, it closes that socket before opening the new
+one, so reconnecting is calling it again and the previous connection can
+never leak. The alternative — refusing until the caller closes — was
+considered and dropped as friction without benefit. What made closing safe
+is a single `fstat`: `fd` is only closed if the kernel says it is a socket,
+so a `{0}`-initialized struct, whose `fd` is `0` and therefore stdin, loses
+nothing. The one case that check cannot tell apart, a program whose stdin
+*is* a socket, is documented with the `fd = -1` rule that makes the question
+moot.
+
 ### `serve.h` / `serve.c` — server harness
 
 The only server-only file, and the only one that knows about `fork`. One

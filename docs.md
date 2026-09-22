@@ -330,7 +330,8 @@ typedef struct {
 } proto_conn_t;
 ```
 
-An authenticated client session. Lifecycle:
+An authenticated client session. One conn holds at most one connection.
+Lifecycle:
 
 1. Zero it, set `fd = -1`.
 2. Fill `keys` with [`proto_load_keys`](#proto_load_keys).
@@ -340,7 +341,16 @@ An authenticated client session. Lifecycle:
 5. [`proto_close`](#proto_close) — sends `QUIT`, closes, sets `fd = -1`.
 
 `proto_connect` leaves `fd == -1` on failure, so `fd >= 0` doubles as an
-"is connected" check.
+"is connected" check. To reconnect, call `proto_connect` again: if the conn
+still holds a connection — live or dead — it is closed first, so the old
+socket is never leaked (see [Recipes](#recipes)).
+
+**Why `fd = -1` and not just `{0}`.** Zero is a valid descriptor (stdin),
+so a `{0}` struct claims to hold a connection it never made. The library
+defends itself — before closing anything in `fd` it asks the kernel whether
+the number is a socket at all, and leaves stdin alone — but the defence has
+one blind spot: a program whose stdin *is* a socket (one started by
+`inetd`, or with a socket redirected into it). `-1` needs no judgement.
 
 ### `proto_handler_fn`
 
@@ -795,6 +805,9 @@ int proto_connect(proto_conn_t *conn, const char *host, int port);
 
 The turnkey client session opener. In one call:
 
+0. if `conn` still holds a connection, closes it as
+   [`proto_close`](#proto_close) would — one conn, one connection, so
+   reconnecting never leaks the previous socket,
 1. initializes libsodium (`proto_init`),
 2. resolves `host` and TCP-connects to the first of its addresses that
    accepts — a name usually has an IPv6 and an IPv4, tried in the
@@ -806,11 +819,12 @@ The turnkey client session opener. In one call:
 5. fills `conn->identity_hex`.
 
 **Precondition:** `conn->keys` must already be filled
-([`proto_load_keys`](#proto_load_keys)).
+([`proto_load_keys`](#proto_load_keys)), and `conn->fd` must be `-1` or a
+socket this library opened — see [`proto_conn_t`](#proto_conn_t).
 
 | Param | Description |
 |---|---|
-| `conn` | session struct; on success `conn->fd` is ready for app commands |
+| `conn` | session struct; on success `conn->fd` is ready for app commands. A connection it still holds is closed first |
 | `host` | hostname or address |
 | `port` | server port, 1–65535 (application policy — the library has no default) |
 
@@ -845,7 +859,11 @@ Graceful shutdown: sends `QUIT`, waits up to
 [`QUIT_TIMEOUT_MS`](#constants-protocolh) for the `BYE`, closes the socket,
 sets `conn->fd = -1`. The wait is a courtesy: a server that never answers,
 or one to which `QUIT` cannot even be sent, does not delay the close beyond
-that bound. Safe to call on an already-closed conn (no-op when `fd < 0`).
+that bound. Safe to call on an already-closed conn (no-op when `fd < 0`),
+and on a dead one: the `QUIT` fails, the wait is skipped, the socket is
+closed. If `fd` holds a number that is not a socket (a `{0}` struct that
+never connected has stdin there) nothing is closed; `fd` is just set to
+`-1`.
 
 ### `proto_auth_client`
 
@@ -1080,6 +1098,27 @@ chars — ~1.37× the plaintext, e.g. a 100 KB image ≈ 137 KB line.
 ---
 
 ## Recipes
+
+### Reconnect after the connection drops
+
+Call `proto_connect` again on the same conn. It closes whatever the conn
+still holds before opening the new socket, so nothing leaks whether the
+old connection was dead (a read returned `PROTO_E_PEER_CLOSED`) or merely
+slow (`PROTO_E_TIMEOUT` on a read of yours):
+
+```c
+int rc = proto_recv_line_timeout(conn.fd, reply, sizeof reply, 5000);
+if (rc == PROTO_E_PEER_CLOSED || rc == PROTO_E_TIMEOUT) {
+    rc = proto_connect(&conn, host, port);      /* old socket closed for you */
+    if (rc < 0) return rc;
+    /* redo whatever was in flight: the server has no memory of it */
+}
+```
+
+Only the socket is replaced; `conn.keys` and `conn.identity_hex` are
+untouched. Any per-session state the *application* kept on the server —
+a write slot, a cursor — is gone with the old connection, and the new
+one starts from the handshake.
 
 ### Send a text payload
 

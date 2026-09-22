@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <sodium.h>
 
@@ -51,11 +52,30 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
     return PROTO_E_REJECTED;
 }
 
+/* Whether fd refers to a socket at all. conn->fd holding a number does not
+ * mean it is a connection of ours: a struct initialized with {0} has fd 0,
+ * which is stdin. Ask the kernel what the number is before touching it. */
+static int is_socket(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode);
+}
+
 int proto_connect(proto_conn_t *conn, const char *host, int port) {
     /* getaddrinfo() would reject a port outside the TCP range, but with
      * the code for a name that does not resolve, which sends the caller
      * to check the wrong thing. Say what is wrong. */
     if (port < 1 || port > 65535) return PROTO_E_BAD_PORT;
+
+    /* One conn, one connection. If the caller reconnects without closing,
+     * the socket still in conn->fd would be overwritten and leak — no one
+     * could close it, and the server child serving it would block until
+     * this process exits — so close it first. Only a socket is ours to
+     * close: whatever else the number refers to is left alone and merely
+     * overwritten below. */
+    if (conn->fd >= 0) {
+        if (is_socket(conn->fd)) proto_close(conn);
+        else conn->fd = -1;
+    }
 
     int rc = proto_init();
     if (rc != PROTO_OK) return rc;
@@ -118,6 +138,9 @@ fail:
 
 void proto_close(proto_conn_t *conn) {
     if (conn->fd < 0) return;
+    /* Not a socket: the number is not ours — a {0} struct that was never
+     * connected has stdin here. Forget it rather than close it. */
+    if (!is_socket(conn->fd)) { conn->fd = -1; return; }
     /* The goodbye is a courtesy: wait for BYE only briefly, and not at all if
      * QUIT could not even be sent. The close ends the connection regardless,
      * so a server that never answers cannot hold the client here. */

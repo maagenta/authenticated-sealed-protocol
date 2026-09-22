@@ -4,7 +4,11 @@
 #include "crypto.h"
 #include "status.h"
 
-/* An authenticated client session. */
+/* An authenticated client session. One conn holds at most one connection:
+ * fd is the socket while connected and -1 otherwise. Set it to -1 before
+ * the first proto_connect; a {0} struct has fd 0, which the library will
+ * recognise as not a socket and leave alone, but -1 is the documented
+ * state and the only one that needs no such judgement. */
 typedef struct {
     int          fd;
     proto_keys_t keys;
@@ -16,6 +20,8 @@ typedef struct {
  * accepts (IPv6 or IPv4, in the resolver's order), run the handshake, and
  * on first connection register this identity's encryption public key.
  * conn->keys must be populated (e.g. via proto_load_keys) before calling.
+ * If conn still holds a connection it is closed first (as proto_close
+ * would), so calling this again is how a client reconnects.
  * Returns PROTO_OK, or the code for the stage that failed: PROTO_E_BAD_PORT
  * (port outside 1..65535), PROTO_E_RESOLVE,
  * PROTO_E_SOCKET (no offered address family exists on this host),
@@ -24,7 +30,9 @@ typedef struct {
  */
 int proto_connect(proto_conn_t *conn, const char *host, int port);
 
-/* Send QUIT and close the connection. */
+/* Send QUIT, wait briefly for BYE, close the socket and set fd to -1.
+ * No-op when fd is -1; when fd is not a socket (a {0} struct that never
+ * connected has stdin there) it is only set to -1, never closed. */
 void proto_close(proto_conn_t *conn);
 
 /*
