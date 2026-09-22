@@ -17,7 +17,9 @@
  *     CFLAGS += -DHANDSHAKE_TIMEOUT_MS=30000 -DQUIT_TIMEOUT_MS=500
  *
  * The #ifndef makes the values here the defaults, used only when the build
- * says nothing.
+ * says nothing. One more compile-time option of the same kind, READ_CHUNK,
+ * is declared in wire.h instead: that module depends on libc alone, and
+ * this header pulls in libsodium for the key sizes below.
  */
 
 /* Bound on each handshake line, on either end. Three tiny round trips:

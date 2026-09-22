@@ -124,8 +124,30 @@ for `BYE` under `QUIT_TIMEOUT_MS`. Both are `#ifndef` constants in
 `protocol.h`, so a consuming project sets its own policy with `-D` from its
 Makefile and the library ships with defaults, not decisions. The deadline is
 per line, not per byte, so a peer trickling bytes cannot stretch it; the
-implementation is one `poll()` before each byte, and the plain
+implementation is one `poll()` before each read, and the plain
 `proto_recv_line` is the same code with no deadline.
+
+The readers have a constraint that shapes them: they work on a bare fd, so
+there is nowhere to keep bytes that belong to the next line. Reading a byte
+at a time honours that trivially but costs one system call per byte — over a
+second for a megabyte. Reading blocks would be fast but would swallow the
+start of the next line. `MSG_PEEK` gives both: look at what the socket
+holds without consuming it, find the newline, then read exactly up to it.
+Nothing is buffered, nothing is over-read, and a line costs two calls per
+`READ_CHUNK` rather than one per byte. `READ_CHUNK` is a ceiling on the
+peek, not an amount read — a three-byte line moves three bytes — and it is
+another `#ifndef` compile-time option, declared in `wire.h` rather than
+beside the timeouts in `protocol.h` so that this module keeps depending on
+libc alone:
+`protocol.h` includes libsodium for the key sizes. It is worth calibrating
+only within 64–256 KB: a peek cannot
+return more than the socket holds, so above the receive buffer the size is
+never filled, while below it each long line costs proportionally more
+calls. Measured on a 64 MB line, the curve is flat from 16 KB upwards and
+only degrades under 4 KB, so the default is already on the plateau and the
+range exists for systems whose buffers are larger. Descriptors that are not
+sockets have no peek and get the old byte-at-a-time read, so a pipe in a
+test still works.
 
 The keepalive is a socket option rather than framing, and lives here because
 `wire` is the lowest layer both sides link: putting it in `serve` would make

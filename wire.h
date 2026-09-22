@@ -10,6 +10,29 @@
  * Binary payloads are carried base64-encoded inside a line.
  */
 
+/*
+ * Most bytes of a line taken from the socket per system call. Lines are read
+ * by peeking at what the socket holds and consuming exactly up to the
+ * newline; this bounds each peek. It is a ceiling, not a quantity: a short
+ * line costs no more than its length.
+ *
+ * A compile-time option, like the timeouts in protocol.h: a consuming
+ * project overrides it from its own Makefile — CFLAGS += -DREAD_CHUNK=262144
+ * — and the value here is the default, used only when the build says
+ * nothing. It lives in this header rather than with the timeouts because
+ * this module depends on libc alone, and protocol.h pulls in libsodium.
+ *
+ * Stay between 64 KB and 256 KB. A peek never returns more than the socket
+ * holds, so past the receive buffer a larger value is never filled and buys
+ * nothing; a smaller one only adds system calls on long lines. Raise it
+ * where SO_RCVBUF is genuinely larger; there is no reason to lower it, as
+ * the value allocates nothing — the peek goes into the buffer the line is
+ * being read into. See docs.md for measurements.
+ */
+#ifndef READ_CHUNK
+#define READ_CHUNK 65536
+#endif
+
 /* Write line + '\n'. Short writes are resumed and EINTR is retried, so this
  * either sends the whole line or fails. A peer that has gone yields
  * PROTO_E_WRITE, not SIGPIPE. Returns PROTO_OK or PROTO_E_WRITE. */

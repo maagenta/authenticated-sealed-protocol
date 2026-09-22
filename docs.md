@@ -8,7 +8,7 @@ Complete reference for the `proto` library. For the design rationale see
 
 - [Conventions](#conventions)
 - [Key files & formats](#key-files--formats)
-- [Constants (`protocol.h`)](#constants-protocolh)
+- [Constants (`protocol.h`, `wire.h`)](#constants-protocolh-wireh)
 - [Status codes](#status-codes)
 - [Error codes](#error-codes)
 - [Types](#types)
@@ -139,7 +139,7 @@ Notes:
 
 ---
 
-## Constants (`protocol.h`)
+## Constants (`protocol.h`, `wire.h`)
 
 | Constant | Value | Meaning / where it matters |
 |---|---|---|
@@ -147,27 +147,64 @@ Notes:
 | `MAX_LINE` | 16384 | Suggested buffer size for **control** lines (handshake, `OK`/`FAIL`, headers). Not a payload limit — payload lines should be read with `proto_recv_line_dyn`. |
 | `HANDSHAKE_TIMEOUT_MS` | 10000 | Deadline for each line of the handshake, on both ends. A peer that connects and goes silent fails the handshake after this long instead of holding a client, or a forked server child, forever. Overridable — see below. |
 | `QUIT_TIMEOUT_MS` | 2000 | How long `proto_close` waits for `BYE` after sending `QUIT`. The socket is closed either way; this only bounds the courtesy. Overridable — see below. |
+| `READ_CHUNK` **(in `wire.h`)** | 65536 | Most bytes of a line taken from the socket per system call. A ceiling, not a quantity: a 3-byte line costs 3 bytes. Overridable at compile time, but worth keeping between 64 KB and 256 KB — see below. |
 | `AUTH_PK_LEN` | `crypto_sign_PUBLICKEYBYTES` (32) | Ed25519 public key size. Identity hex buffers need `AUTH_PK_LEN * 2 + 1`. |
 | `AUTH_SK_LEN` | `crypto_sign_SECRETKEYBYTES` (64) | Ed25519 secret key size. |
 | `AUTH_SIG_LEN` | `crypto_sign_BYTES` (64) | Detached signature size. |
 | `ENC_PK_LEN` | `crypto_box_PUBLICKEYBYTES` (32) | X25519 public key size. |
 | `ENC_SK_LEN` | `crypto_box_SECRETKEYBYTES` (32) | X25519 secret key size. |
 
-**Overriding the timeouts.** The two timeouts are build-time policy, not
-runtime configuration: the right values depend on the deployment (LAN vs.
-mobile links, how patient a server should be with strangers), and that is a
-decision of the project that links the library, not of the library. Both are
-wrapped in `#ifndef`, so a consuming application sets its own from its
-Makefile — or any `-D` on the compiler line — without editing `protocol.h`:
+**Compile-time options.** Three of the constants above are policy rather
+than fact: the two timeouts and `READ_CHUNK`. The right values depend on
+the deployment (LAN vs. mobile links, how patient a server should be with
+strangers, how big the payloads are), and that is a decision of the project
+that links the library, not of the library. All three are wrapped in
+`#ifndef`, so a consuming application sets its own from its Makefile — or
+any `-D` on the compiler line — without editing the library's headers:
 
 ```make
 # in the consuming project's Makefile
 CFLAGS += -DHANDSHAKE_TIMEOUT_MS=30000 -DQUIT_TIMEOUT_MS=500
 ```
 
-The values in `protocol.h` are the defaults, used only when the build says
+The values in the headers are the defaults, used only when the build says
 nothing. Every source file must see the same value: put the `-D` in the
 `CFLAGS` used for the whole build, not on a single object.
+
+They live in **two** headers: `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS`
+in `protocol.h`, `READ_CHUNK` in `wire.h`. The split is deliberate —
+`protocol.h` includes libsodium for the key sizes, and `wire` is the one
+module that compiles against libc alone, so a constant it needs cannot come
+from there. Where you write the `-D` makes no difference either way.
+
+**Calibrating `READ_CHUNK`.** `CFLAGS += -DREAD_CHUNK=262144` overrides it
+like the timeouts, but stay between **64 KB and 256 KB** unless you have
+measured a reason not to. A peek never returns more than the socket is
+holding, so past the receive buffer the extra size is simply never filled,
+and the gain from a bigger chunk flattens well before the top of that
+range. Reading one 64 MB line over a local socket:
+
+| `READ_CHUNK` | time |
+|---|---|
+| 1 KB | 0.253 s |
+| 4 KB | 0.158 s |
+| 16 KB | 0.140 s |
+| 64 KB (default) | 0.138 s |
+| 256 KB | 0.138 s |
+
+- **Raising it** above the default bought nothing here. It can help where
+  the receive buffer is genuinely larger (`SO_RCVBUF` tuned up, or a system
+  that auto-tunes it) — measure, and if the time does not move, the buffer
+  was the limit, not the chunk.
+- **Lowering it** buys nothing and costs system calls on long lines, and
+  only on long lines: a short line moves its own length whatever the
+  setting, and the value allocates no memory of its own — the peek goes
+  straight into the buffer the line is being read into. Below ~4 KB the
+  extra calls start to show.
+
+Correctness does not depend on the value: any size ≥ 1 reads the same
+lines — a chunk that cuts a line in half is the ordinary case, handled on
+the next pass — so the choice is purely about cost.
 
 `protocol.h` also documents the shared handshake wire format (see
 [appendix](#wire-protocol-appendix)).
@@ -413,6 +450,14 @@ positional initializers are also a trap — name the field.
 `#include "wire.h"` — no dependencies besides libc. One message = one
 `\n`-terminated line; `\r` is stripped on read.
 
+**How lines are read.** The readers keep no state between calls — they work
+on a bare fd — yet never take a byte of the next line: each step peeks at
+what the socket holds (`MSG_PEEK`, up to [`READ_CHUNK`](#constants-protocolh-wireh)
+bytes), finds the newline, and then consumes exactly up to it. A long line
+costs two system calls per chunk rather than one per byte; a short line
+costs its own length. On a descriptor that is not a socket — a pipe, in a
+test — there is no peek, and the readers fall back to one byte at a time.
+
 ### `proto_send_line`
 
 ```c
@@ -494,7 +539,7 @@ the bytes after it are still in the socket — the stream is no longer at a
 line boundary, so the sensible reaction is to close the connection.
 
 This is what bounds the handshake: every handshake read in `auth` uses it
-with [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh), and `proto_close` uses
+with [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh-wireh), and `proto_close` uses
 it with `QUIT_TIMEOUT_MS`. Applications may use it for their own commands
 where a silent peer must not block a thread or a forked child; for a peer
 that has *vanished* rather than gone quiet, see
@@ -615,7 +660,7 @@ static void handler(int fd, const char *identity_hex, void *ctx) {
 **The handshake is covered separately.** `proto_serve` authenticates in a
 forked child *before* calling your handler, so probing enabled there starts
 only after the handshake. That window is bounded on its own: every handshake
-read gives up after [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh), whether
+read gives up after [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh-wireh), whether
 the peer vanished or merely went quiet, so a child never outlives it.
 
 ---
@@ -857,7 +902,7 @@ void proto_close(proto_conn_t *conn);
 ```
 
 Graceful shutdown: sends `QUIT`, waits up to
-[`QUIT_TIMEOUT_MS`](#constants-protocolh) for the `BYE`, closes the socket,
+[`QUIT_TIMEOUT_MS`](#constants-protocolh-wireh) for the `BYE`, closes the socket,
 sets `conn->fd = -1`. The wait is a courtesy: a server that never answers,
 or one to which `QUIT` cannot even be sent, does not delay the close beyond
 that bound. Safe to call on an already-closed conn (no-op when `fd < 0`),
@@ -886,7 +931,7 @@ already-connected fd, and stops at the server's verdict.
   `PROTO_E_UNEXPECTED_REPLY` if the reply to `HELLO` was neither
   `CHALLENGE` nor `FAIL`, `PROTO_E_BAD_CHALLENGE` if the challenge line was
   malformed, `PROTO_E_TIMEOUT` if the server went silent for longer than
-  [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh) on any line, or another
+  [`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh-wireh) on any line, or another
   transport code from the underlying read or write
 
 Use when you manage the socket yourself (custom transport, proxy, test
@@ -912,7 +957,7 @@ client's signature, and compares the client's identity against
 has already been sent to the peer (`expected HELLO`, `invalid public key`,
 `signature verification failed`, `access denied`, …), so the caller just
 closes the socket. Each read waits at most
-[`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh): a peer that connects and
+[`HANDSHAKE_TIMEOUT_MS`](#constants-protocolh-wireh): a peer that connects and
 says nothing gets `NULL` after that, not a caller blocked for good.
 
 Note the returned identity always equals `allowed_hex` in the current

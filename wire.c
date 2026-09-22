@@ -50,17 +50,56 @@ int proto_send_line(int fd, const char *line) {
     return write_all(fd, "\n", 1);
 }
 
-/* Read one byte, retrying when a signal interrupts the call — nothing was
- * consumed in that case, so it is not a connection failure. The cost is that
- * a signal handler alone cannot break a caller out of a blocked read; a
- * shutdown() on the fd from the handler can, and surfaces as a real error.
- * Returns 1 on a byte read, 0 at end of stream, -1 on a real error. */
-static ssize_t read_byte(int fd, char *c) {
-    for (;;) {
-        ssize_t n = read(fd, c, 1);
-        if (n < 0 && errno == EINTR) continue;
-        return n;
+/* Read up to n bytes of the current line into buf, never past its newline.
+ *
+ * Reading a byte at a time never takes bytes of the next line by mistake,
+ * but costs one system call per byte. Reading a block would be fast but
+ * would pull the next line out of the socket, and an API on a bare fd has
+ * nowhere to keep it. MSG_PEEK gives both: look at what the socket holds
+ * without consuming it, find the newline, then read exactly up to it. The
+ * bytes seen are still there for the real read — a stream socket hands
+ * them out in order and nobody else reads this fd — so the two calls agree.
+ *
+ * Returns the bytes stored (the newline is consumed but not stored) and sets
+ * *done when the newline was consumed; 0 at end of stream; -1 on error.
+ * EINTR is retried: nothing was consumed, so it is not a failure. Anything
+ * that is not a socket (a pipe in a test) has no MSG_PEEK and falls back to
+ * one byte at a time. */
+static ssize_t read_line_part(int fd, char *buf, size_t n, int *done) {
+    *done = 0;
+    if (n > READ_CHUNK) n = READ_CHUNK;
+
+    ssize_t seen;
+    do seen = recv(fd, buf, n, MSG_PEEK);
+    while (seen < 0 && errno == EINTR);
+    if (seen < 0 && errno == ENOTSOCK) {
+        do seen = read(fd, buf, 1);
+        while (seen < 0 && errno == EINTR);
+        if (seen == 1 && buf[0] == '\n') { *done = 1; return 0; }
+        return seen;
     }
+    if (seen <= 0) return seen;
+
+    const char *nl = memchr(buf, '\n', (size_t)seen);
+    size_t take = nl ? (size_t)(nl - buf) + 1 : (size_t)seen;
+    /* Consume exactly what was seen: it is already there, so this cannot
+     * block, and only a signal can cut it short. */
+    for (size_t got = 0; got < take; ) {
+        ssize_t r = read(fd, buf + got, take - got);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return -1;
+        got += (size_t)r;
+    }
+    if (nl) { *done = 1; return (ssize_t)(take - 1); }
+    return (ssize_t)take;
+}
+
+/* Drop every '\r' in buf[0..n); returns the new length. */
+static size_t strip_cr(char *buf, size_t n) {
+    size_t w = 0;
+    for (size_t r = 0; r < n; r++)
+        if (buf[r] != '\r') buf[w++] = buf[r];
+    return w;
 }
 
 /* Milliseconds on a clock that never jumps, for deadlines. */
@@ -85,34 +124,33 @@ static int wait_readable(int fd, long long deadline) {
 }
 
 /* One line into buf, giving up at the deadline if there is one (0 = none).
- * The deadline bounds the whole line, checked before every byte, so a peer
- * trickling one byte at a time cannot hold the caller past it. */
+ * The deadline bounds the whole line, checked before every read, so a peer
+ * trickling bytes cannot hold the caller past it. */
 static int recv_line_until(int fd, char *buf, size_t bufsz, long long deadline) {
     if (bufsz == 0) return PROTO_E_PARAM;   /* no room even for the terminator */
     size_t i = 0;
-    int terminated = 0;
-    while (i + 1 < bufsz) {      /* leave room for '\0'; never underflows */
-        /* buf is NUL-terminated on every error path, so a caller that logs
-         * it after a failure reads a short string, not stale stack. */
+    for (;;) {
+        /* buf is NUL-terminated on every exit, so a caller that logs it
+         * after a failure reads a short string, not stale stack. */
+        if (i + 1 >= bufsz) {
+            /* Out of room before the newline: the rest of the line is still
+             * in the socket and would surface as a bogus next line. Say so
+             * instead of returning a length that looks like a complete read. */
+            buf[i] = '\0';
+            return PROTO_E_LINE_TOO_LONG;
+        }
         if (deadline) {
             int r = wait_readable(fd, deadline);
             if (r == 0) { buf[i] = '\0'; return PROTO_E_TIMEOUT; }
             if (r <  0) { buf[i] = '\0'; return PROTO_E_READ; }
         }
-        char c;
-        ssize_t n = read_byte(fd, &c);
-        if (n == 0) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
-        if (n <  0) { buf[i] = '\0'; return PROTO_E_READ; }
-        if (c == '\n') { terminated = 1; break; }
-        if (c == '\r') continue;
-        buf[i++] = c;
+        int done;
+        ssize_t n = read_line_part(fd, buf + i, bufsz - 1 - i, &done);
+        if (n <  0)          { buf[i] = '\0'; return PROTO_E_READ; }
+        if (n == 0 && !done) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
+        i += strip_cr(buf + i, (size_t)n);
+        if (done) { buf[i] = '\0'; return (int)i; }
     }
-    buf[i] = '\0';
-    /* Ran out of room before the newline: the rest of the line is still in
-     * the socket and would surface as a bogus next line. Say so instead of
-     * returning a length that looks like a complete read. */
-    if (!terminated) return PROTO_E_LINE_TOO_LONG;
-    return (int)i;
 }
 
 int proto_recv_line(int fd, char *buf, size_t bufsz) {
@@ -127,18 +165,18 @@ char *proto_recv_line_dyn(int fd) {
     size_t sz = 4096, i = 0;
     char *buf = malloc(sz);
     if (!buf) return NULL;
-    while (1) {
-        char c;
-        if (read_byte(fd, &c) <= 0) { free(buf); return NULL; }
-        if (c == '\n') break;
-        if (c == '\r') continue;
-        if (i + 1 >= sz) {
+    for (;;) {
+        if (i + 1 >= sz) {           /* full: double, and keep reading */
             sz *= 2;
             char *nb = realloc(buf, sz);
             if (!nb) { free(buf); return NULL; }
             buf = nb;
         }
-        buf[i++] = c;
+        int done;
+        ssize_t n = read_line_part(fd, buf + i, sz - 1 - i, &done);
+        if (n < 0 || (n == 0 && !done)) { free(buf); return NULL; }
+        i += strip_cr(buf + i, (size_t)n);
+        if (done) break;
     }
     buf[i] = '\0';
     return buf;
