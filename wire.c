@@ -161,24 +161,50 @@ int proto_recv_line_timeout(int fd, char *buf, size_t bufsz, int ms) {
     return recv_line_until(fd, buf, bufsz, ms < 0 ? 0 : now_ms() + ms);
 }
 
+/* Room for a line at the cap, one character past it, and the terminator.
+ * The extra character is what makes the limit exact rather than a matter of
+ * how the peer's bytes happened to arrive: a line is too long only once a
+ * character past MAX_PAYLOAD has actually been stored. */
+#define MAX_PAYLOAD_BUF ((size_t)MAX_PAYLOAD + 2)
+
 char *proto_recv_line_dyn(int fd) {
-    size_t sz = 4096, i = 0;
+    return proto_recv_line_dyn_status(fd, NULL);
+}
+
+char *proto_recv_line_dyn_status(int fd, int *status) {
+    int ignored = PROTO_OK;
+    if (!status) status = &ignored;
+
+    size_t sz = MAX_PAYLOAD_BUF < 4096 ? MAX_PAYLOAD_BUF : 4096;
+    size_t i = 0;
     char *buf = malloc(sz);
-    if (!buf) return NULL;
+    if (!buf) { *status = PROTO_E_NOMEM; return NULL; }
     for (;;) {
-        if (i + 1 >= sz) {           /* full: double, and keep reading */
-            sz *= 2;
-            char *nb = realloc(buf, sz);
-            if (!nb) { free(buf); return NULL; }
+        if (i + 1 >= sz) {           /* full: grow, but never past the cap */
+            if (sz >= MAX_PAYLOAD_BUF) {
+                free(buf); *status = PROTO_E_LINE_TOO_LONG; return NULL;
+            }
+            size_t want = sz <= MAX_PAYLOAD_BUF / 2 ? sz * 2 : MAX_PAYLOAD_BUF;
+            char *nb = realloc(buf, want);
+            if (!nb) { free(buf); *status = PROTO_E_NOMEM; return NULL; }
             buf = nb;
+            sz = want;
         }
         int done;
         ssize_t n = read_line_part(fd, buf + i, sz - 1 - i, &done);
-        if (n < 0 || (n == 0 && !done)) { free(buf); return NULL; }
+        if (n <  0)          { free(buf); *status = PROTO_E_READ;        return NULL; }
+        if (n == 0 && !done) { free(buf); *status = PROTO_E_PEER_CLOSED; return NULL; }
         i += strip_cr(buf + i, (size_t)n);
+        /* A character past the cap is stored before this is noticed — that
+         * is what the spare byte above is for. The rest of the line stays
+         * in the socket; the caller answers and closes. */
+        if (i > (size_t)MAX_PAYLOAD) {
+            free(buf); *status = PROTO_E_LINE_TOO_LONG; return NULL;
+        }
         if (done) break;
     }
     buf[i] = '\0';
+    *status = PROTO_OK;
     return buf;
 }
 

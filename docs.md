@@ -21,6 +21,7 @@ Complete reference for the `proto` library. For the design rationale see
   - [`proto_recv_line`](#proto_recv_line)
   - [`proto_recv_line_timeout`](#proto_recv_line_timeout)
   - [`proto_recv_line_dyn`](#proto_recv_line_dyn)
+  - [`proto_recv_line_dyn_status`](#proto_recv_line_dyn_status)
   - [`proto_send_prefixed`](#proto_send_prefixed)
   - [`proto_keepalive`](#proto_keepalive)
 - [Module `crypto` — keys and encryption](#module-crypto--keys-and-encryption)
@@ -65,8 +66,9 @@ Complete reference for the `proto` library. For the design rationale see
   the port is taken, say), the library reads it and hands you a code.
 
 **Memory ownership.**
-- Any function whose name ends in `_new`, plus `proto_recv_line_dyn` and
-  `proto_auth_server`, returns heap memory **the caller must `free()`**.
+- Any function whose name ends in `_new`, plus `proto_recv_line_dyn`,
+  `proto_recv_line_dyn_status` and `proto_auth_server`, returns heap memory
+  **the caller must `free()`**.
 - Everything else writes into caller-provided buffers.
 
 **Process model.**
@@ -148,19 +150,21 @@ Notes:
 | `HANDSHAKE_TIMEOUT_MS` | 10000 | Deadline for each line of the handshake, on both ends. A peer that connects and goes silent fails the handshake after this long instead of holding a client, or a forked server child, forever. Overridable — see below. |
 | `QUIT_TIMEOUT_MS` | 2000 | How long `proto_close` waits for `BYE` after sending `QUIT`. The socket is closed either way; this only bounds the courtesy. Overridable — see below. |
 | `READ_CHUNK` **(in `wire.h`)** | 65536 | Most bytes of a line taken from the socket per system call. A ceiling, not a quantity: a 3-byte line costs 3 bytes. Overridable at compile time, but worth keeping between 64 KB and 256 KB — see below. |
+| `MAX_PAYLOAD` **(in `wire.h`)** | 16 MB | Longest line the allocating readers accept, in characters. Past it they stop with `PROTO_E_LINE_TOO_LONG` instead of allocating for a peer that may never send a newline. A limit on one *message*, not on what an application can transfer — see below. Overridable at compile time. |
 | `AUTH_PK_LEN` | `crypto_sign_PUBLICKEYBYTES` (32) | Ed25519 public key size. Identity hex buffers need `AUTH_PK_LEN * 2 + 1`. |
 | `AUTH_SK_LEN` | `crypto_sign_SECRETKEYBYTES` (64) | Ed25519 secret key size. |
 | `AUTH_SIG_LEN` | `crypto_sign_BYTES` (64) | Detached signature size. |
 | `ENC_PK_LEN` | `crypto_box_PUBLICKEYBYTES` (32) | X25519 public key size. |
 | `ENC_SK_LEN` | `crypto_box_SECRETKEYBYTES` (32) | X25519 secret key size. |
 
-**Compile-time options.** Three of the constants above are policy rather
-than fact: the two timeouts and `READ_CHUNK`. The right values depend on
-the deployment (LAN vs. mobile links, how patient a server should be with
-strangers, how big the payloads are), and that is a decision of the project
-that links the library, not of the library. All three are wrapped in
-`#ifndef`, so a consuming application sets its own from its Makefile — or
-any `-D` on the compiler line — without editing the library's headers:
+**Compile-time options.** Four of the constants above are policy rather
+than fact: the two timeouts, `READ_CHUNK` and `MAX_PAYLOAD`. The right
+values depend on the deployment (LAN vs. mobile links, how patient a server
+should be with strangers, how big the messages are), and that is a decision
+of the project that links the library, not of the library. All four are
+wrapped in `#ifndef`, so a consuming application sets its own from its
+Makefile — or any `-D` on the compiler line — without editing the library's
+headers:
 
 ```make
 # in the consuming project's Makefile
@@ -172,7 +176,8 @@ nothing. Every source file must see the same value: put the `-D` in the
 `CFLAGS` used for the whole build, not on a single object.
 
 They live in **two** headers: `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS`
-in `protocol.h`, `READ_CHUNK` in `wire.h`. The split is deliberate —
+in `protocol.h`, `READ_CHUNK` and `MAX_PAYLOAD` in `wire.h`. The split is
+deliberate —
 `protocol.h` includes libsodium for the key sizes, and `wire` is the one
 module that compiles against libc alone, so a constant it needs cannot come
 from there. Where you write the `-D` makes no difference either way.
@@ -205,6 +210,45 @@ range. Reading one 64 MB line over a local socket:
 Correctness does not depend on the value: any size ≥ 1 reads the same
 lines — a chunk that cuts a line in half is the ordinary case, handled on
 the next pass — so the choice is purely about cost.
+
+**Choosing `MAX_PAYLOAD`.** This one is not about cost, it is about what a
+peer can make you allocate. `proto_recv_line_dyn` grows its buffer as the
+line arrives; without a limit, a peer that never sends a newline — broken
+or hostile — makes the other side allocate until the system kills it, once
+per connection on a forking server. Past the limit the read stops with
+`PROTO_E_LINE_TOO_LONG` and nothing more is allocated.
+
+It bounds **one message**, not what an application can transfer. Anything
+larger is sent as several messages, which is what you want anyway: the
+receiver holds a whole line in memory, and an application that unseals it
+holds three things at once — the line (at most `MAX_PAYLOAD`), the base64
+decoded into `cipher` (as much again), and the plaintext (about 0.75 of
+it). The worst case is therefore close to **2.75 × `MAX_PAYLOAD` per
+connection**, and a forking server has one per client. A 200 MB video as
+one message would be some 550 MB in one server child, all-or-nothing on a
+dropped connection. Chunked into 4 MB messages it is constant memory,
+resumable, and each piece can be retried on its own:
+
+```
+C->S: PUT 42 1/128 <b64 of chunk 1>
+S->C: OK
+...
+C->S: DONE 42
+S->C: OK <id>
+```
+
+The default, 16 MB, carries a sealed box of about 11.6 MB of original data
+(base64 costs a third more, the seal 48 bytes) — a photo or a voice note
+without chunking. Raise it if your messages are genuinely bigger and you
+have the memory for `2.75 ×` it per concurrent connection; lower it on a
+server that only ever exchanges short commands, where it then also serves
+as a cheap sanity limit.
+
+Both options refuse nonsense **at build time**: `MAX_PAYLOAD` must be
+between 64 bytes and 1 GiB, `READ_CHUNK` at least 1. A `0` slipping in from
+an empty Makefile variable would otherwise leave every read failing —
+`PROTO_E_LINE_TOO_LONG` for one, `PROTO_E_PEER_CLOSED` for the other —
+with nothing to point at the cause.
 
 `protocol.h` also documents the shared handshake wire format (see
 [appendix](#wire-protocol-appendix)).
@@ -326,7 +370,7 @@ the sign rule and the successes.
 | `PROTO_E_WRITE` | `-601` | `write()` failed | `proto_send_line`, `proto_send_prefixed` |
 | `PROTO_E_READ` | `-602` | `read()` failed | `proto_recv_line` |
 | `PROTO_E_PEER_CLOSED` | `-603` | the peer closed the connection | `proto_recv_line` |
-| `PROTO_E_LINE_TOO_LONG` | `-604` | the line did not fit; the rest is still unread | `proto_recv_line` |
+| `PROTO_E_LINE_TOO_LONG` | `-604` | the line did not fit — the caller's buffer for `proto_recv_line`, `MAX_PAYLOAD` for the allocating readers; the rest is still unread either way | `proto_recv_line`, `proto_recv_line_timeout`, `proto_recv_line_dyn_status` |
 | `PROTO_E_TIMEOUT` | `-605` | the deadline passed before the whole line arrived | `proto_recv_line_timeout`; surfaces from `proto_connect` and `proto_auth_client` when the server goes silent mid-handshake |
 
 **Handshake, client side**
@@ -558,12 +602,15 @@ if (rc < 0)                goto disconnected;
 char *proto_recv_line_dyn(int fd);
 ```
 
-Read one line of **arbitrary length** into a heap buffer (grows by doubling,
-starts at 4 KB). NUL-terminated, newline stripped.
+Read one line of up to [`MAX_PAYLOAD`](#constants-protocolh-wireh)
+characters into a heap buffer (grows by doubling, starts at 4 KB, never
+past the limit). NUL-terminated, newline stripped.
 
-**Returns** the line (caller **must `free()`**), or `NULL` on error/EOF.
-`NULL` is the normal way to detect a disconnected peer in a server command
-loop.
+**Returns** the line (caller **must `free()`**), or `NULL` on error, on
+end of stream, or when the line is longer than `MAX_PAYLOAD`. `NULL` is the
+normal way to detect a disconnected peer in a server command loop; when the
+reason matters, use
+[`proto_recv_line_dyn_status`](#proto_recv_line_dyn_status).
 
 ```c
 char *line;
@@ -571,8 +618,42 @@ while ((line = proto_recv_line_dyn(fd)) != NULL) {
     dispatch(line);
     free(line);
 }
-/* NULL: client went away */
+/* NULL: client went away, or sent a line past MAX_PAYLOAD */
 ```
+
+### `proto_recv_line_dyn_status`
+
+```c
+char *proto_recv_line_dyn_status(int fd, int *status);
+```
+
+[`proto_recv_line_dyn`](#proto_recv_line_dyn) that says why it failed.
+`status` may be `NULL`, in which case the two are identical.
+
+| Param | Description |
+|---|---|
+| `fd` | connected socket |
+| `status` | set to `PROTO_OK` on success, or to the reason for the `NULL`: `PROTO_E_LINE_TOO_LONG` (over `MAX_PAYLOAD`), `PROTO_E_PEER_CLOSED`, `PROTO_E_READ`, `PROTO_E_NOMEM` |
+
+Use it where the reason changes what the application does. Telling "the
+client is gone" from "the client sent something too big" is the usual case:
+the second deserves an answer before the connection closes.
+
+```c
+int rc;
+char *line = proto_recv_line_dyn_status(fd, &rc);
+if (!line) {
+    if (rc == PROTO_E_LINE_TOO_LONG)
+        proto_send_line(fd, "FAIL message too large");   /* then close */
+    return;                                              /* peer gone: nothing to say */
+}
+```
+
+**After `PROTO_E_LINE_TOO_LONG` the connection is finished.** The rest of
+the oversized line is still in the socket — the reader stops rather than
+draining it, because draining is exactly the unbounded work the limit
+exists to prevent — so the stream is no longer at a line boundary. Answer
+if you want to, then close.
 
 ### `proto_send_prefixed`
 
@@ -1181,6 +1262,24 @@ Only the socket is replaced; `conn.keys` and `conn.identity_hex` are
 untouched. Any per-session state the *application* kept on the server —
 a write slot, a cursor — is gone with the old connection, and the new
 one starts from the handshake.
+
+**What an interrupted message costs.** TCP hides the small failures: lost,
+reordered or corrupted packets are retransmitted, so a brief glitch only
+makes the read take longer. What it does not hide is the connection
+breaking — then the read fails, whatever had arrived of the line is
+discarded, and there is no resume. A message is delivered whole or not at
+all, which is what keeps a half-received photo from ever reaching storage,
+but it means a 16 MB message lost at 99% is resent from the start. Two
+consequences worth designing for:
+
+- **`PROTO_OK` from a send is not an acknowledgment.** It means the bytes
+  reached the kernel's send buffer, not the peer. The only acknowledgment
+  is the reply your protocol defines (`OK`/`FAIL`).
+- **A retry can duplicate.** If the connection dies after the server acted
+  but before its `OK` arrives, the client cannot tell that from "never
+  arrived", and will resend. Give commands that change state an
+  application-level id — `PUT 42 3/128` is safe to repeat, a bare
+  `POST <text>` is not.
 
 ### Send a text payload
 

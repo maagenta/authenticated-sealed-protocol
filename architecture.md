@@ -63,8 +63,16 @@ specification of the handshake. It defines:
 
 - `CHALLENGE_LEN` (32) and `MAX_LINE` (16384, a guideline for *control*
   lines, not a payload limit);
+- `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS`, the two timeouts the
+  handshake and the goodbye run under, each wrapped in `#ifndef` so a
+  consuming build can set its own with `-D`;
 - the libsodium key-size aliases (`AUTH_PK_LEN`, `AUTH_SK_LEN`,
   `AUTH_SIG_LEN`, `ENC_PK_LEN`, `ENC_SK_LEN`).
+
+The other two compile-time options, `READ_CHUNK` and `MAX_PAYLOAD`, are
+declared in `wire.h` instead: they belong to that module, and it is the one
+that compiles against libc alone, which this header's libsodium include
+would break.
 
 Everything else includes it, directly or transitively. Deliberately contains
 **no application constants** — ports, size limits, and command sets belong to
@@ -103,7 +111,7 @@ can compose a better message than the library could.
 ### `wire.h` / `wire.c` — framing
 
 The lowest layer: how bytes become messages, and how long a connection may
-sit idle before the kernel checks on it. Six functions, no crypto, no
+sit idle before the kernel checks on it. Seven functions, no crypto, no
 protocol knowledge, dependencies on libc only:
 
 | Function | Role |
@@ -111,7 +119,8 @@ protocol knowledge, dependencies on libc only:
 | `proto_send_line` | write `line + '\n'` |
 | `proto_recv_line` | read one line into a fixed buffer (short control lines) |
 | `proto_recv_line_timeout` | the same, giving up when a deadline passes (a silent peer) |
-| `proto_recv_line_dyn` | read one line of unbounded size onto the heap (payload lines) |
+| `proto_recv_line_dyn` | read one line onto the heap, up to `MAX_PAYLOAD` (payload lines) |
+| `proto_recv_line_dyn_status` | the same, reporting why it failed (too long vs. peer gone) |
 | `proto_send_prefixed` | write `<prefix><body>\n` without assembling a buffer (large payloads) |
 | `proto_keepalive` | enable keepalive probing on a connection and set its timing |
 
@@ -138,16 +147,26 @@ Nothing is buffered, nothing is over-read, and a line costs two calls per
 peek, not an amount read — a three-byte line moves three bytes — and it is
 another `#ifndef` compile-time option, declared in `wire.h` rather than
 beside the timeouts in `protocol.h` so that this module keeps depending on
-libc alone:
-`protocol.h` includes libsodium for the key sizes. It is worth calibrating
-only within 64–256 KB: a peek cannot
-return more than the socket holds, so above the receive buffer the size is
-never filled, while below it each long line costs proportionally more
-calls. Measured on a 64 MB line, the curve is flat from 16 KB upwards and
+libc alone: `protocol.h` includes libsodium for the key sizes. It is worth
+calibrating only within 64–256 KB: a peek cannot return more than the
+socket holds, so above the receive buffer the size is never filled, while
+below it each long line costs proportionally more calls. Measured on a 64 MB line, the curve is flat from 16 KB upwards and
 only degrades under 4 KB, so the default is already on the plateau and the
 range exists for systems whose buffers are larger. Descriptors that are not
 sockets have no peek and get the old byte-at-a-time read, so a pipe in a
 test still works.
+
+The reader that allocates needs a second option, `MAX_PAYLOAD`, for a
+different reason: not cost but exposure. A line has no length prefix, so
+its end is only known when the newline arrives, and a peer that never sends
+one would otherwise make the other side allocate until the system kills it
+— once per connection, on a server that forks. The limit turns that into
+`PROTO_E_LINE_TOO_LONG`. It deliberately does not drain the rest of the
+oversized line: draining is the same unbounded work the limit exists to
+prevent, so the stream is left desynchronized and the connection is
+finished. Because that failure is worth telling apart from a peer that
+simply left, `proto_recv_line_dyn` grew a sibling that reports the reason,
+rather than changing the signature every consumer already calls.
 
 The keepalive is a socket option rather than framing, and lives here because
 `wire` is the lowest layer both sides link: putting it in `serve` would make
@@ -379,11 +398,12 @@ The server is an *authenticated dumb blob store*:
 - Two read paths:
   - `proto_recv_line()` — fixed caller buffer; for short control lines
     (`OK`, `FAIL …`, headers).
-  - `proto_recv_line_dyn()` — heap-growing; for payload lines of unbounded
-    size. **Use this whenever a line might carry a sealed blob.**
+  - `proto_recv_line_dyn()` — heap-growing, bounded by `MAX_PAYLOAD`; for
+    payload lines. **Use this whenever a line might carry a sealed blob.**
 - The payload API is length-based (`msg`, `msg_len`), never `strlen`-based, so
-  payloads may contain NUL bytes — images and audio work unmodified. There is
-  no size ceiling in the library; size limits are application policy.
+  payloads may contain NUL bytes — images and audio work unmodified. One
+  message may carry up to `MAX_PAYLOAD` characters; anything larger is
+  several messages, which is application policy.
 
 ## Base64 on the wire
 

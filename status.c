@@ -37,7 +37,7 @@ const char *proto_strerror(int code) {
     case PROTO_E_WRITE:             return "write failed";
     case PROTO_E_READ:              return "read failed";
     case PROTO_E_PEER_CLOSED:       return "peer closed the connection";
-    case PROTO_E_LINE_TOO_LONG:     return "line longer than the buffer";
+    case PROTO_E_LINE_TOO_LONG:     return "line longer than the limit";
     case PROTO_E_TIMEOUT:           return "read timed out";
 
     case PROTO_E_UNEXPECTED_REPLY:  return "unexpected reply from server";

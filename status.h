@@ -61,7 +61,7 @@ typedef enum {
     PROTO_E_WRITE              = -601,  /* write() failed                    */
     PROTO_E_READ               = -602,  /* read() failed                     */
     PROTO_E_PEER_CLOSED        = -603,  /* peer closed the connection        */
-    PROTO_E_LINE_TOO_LONG      = -604,  /* line did not fit; rest unread     */
+    PROTO_E_LINE_TOO_LONG      = -604,  /* over buffer or cap; rest unread   */
     PROTO_E_TIMEOUT            = -605,  /* deadline passed before the line   */
 
     /* -7xx: handshake, client side */
