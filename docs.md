@@ -976,17 +976,30 @@ No arguments. It generates one complete identity:
 | Ed25519 authentication keypair | `crypto_sign_keypair` | `auth.key` (secret, 64 B), `auth.pub` (public, 32 B) |
 | X25519 encryption keypair | `crypto_box_keypair` | `enc.key` (secret, 32 B) — the public half is discarded, it is re-derived on load |
 
-Each file is a single line of base64 (standard variant), `chmod 0600`, in
-exactly the format [`proto_load_keys`](#proto_load_keys) and
+Each file is a single line of base64 (standard variant), created with mode
+`0600` (owner only) from the moment it exists, in exactly the format
+[`proto_load_keys`](#proto_load_keys) and
 [`proto_load_pubkey_hex`](#proto_load_pubkey_hex) parse — the tool is the
 writing half of the key-file contract those functions read.
 
 ### Notes
 
-- **Existing files are overwritten without prompting.** Running it twice
-  creates a *new* identity: the server won't recognize you (`FAIL access
-  denied` until it gets the new `auth.pub`), and data sealed to the old
-  `enc.key` becomes permanently unreadable. Back keys up before regenerating.
+- **Existing files are never overwritten.** If any of the three exists the
+  tool stops with `already exists; refusing to overwrite a key` and creates
+  nothing. A new identity means the server won't recognize you (`FAIL
+  access denied` until it gets the new `auth.pub`), and data sealed to the
+  old `enc.key` becomes permanently unreadable — so regenerating is a
+  deliberate act: back the old files up, delete them, run again.
+- **Filesystems without permissions.** On FAT, some network mounts and
+  similar, `0600` cannot be enforced and the files would be readable by
+  every user of the machine. The tool checks *before* writing anything —
+  it creates and removes a probe file — and if so, prints a warning and
+  asks `Create the key files here anyway? [y/N]`. Anything but `y` aborts
+  with nothing written. With no terminal on stdin (a script, a
+  Dockerfile) the answer is always no; generate the keys on a filesystem
+  that can protect them and copy them afterwards.
+- A write error (disk full, and so on) is reported and the partial file
+  removed, so a truncated key never sits on disk looking valid.
 - Distribute the files as the [key-file table](#key-files--formats) says:
   both `.key` files stay with the client; `auth.pub` goes to the server.
 - One run = one identity. For several devices sharing an identity, copy the

@@ -67,6 +67,8 @@ It writes three files (single-line base64, mode 0600):
 
 There is no `enc.pub` file: the encryption public key is derived from
 `enc.key` on load and reaches the server through the `REGISTER` step.
+Existing key files are never overwritten, and on a filesystem that cannot
+enforce permissions the tool warns and asks before writing anything.
 See [docs.md](docs.md#tool-keygen--generating-key-files) for details.
 
 ## Quick start

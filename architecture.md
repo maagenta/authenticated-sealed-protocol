@@ -241,6 +241,18 @@ their binaries, and a top-level `keygen.c` would collide with the
 application's own `main`. The subfolder keeps the tool out of the library
 file set while shipping with it.
 
+Two of its habits are deliberate. Secret files are created with mode
+`0600` in the `open()` call itself, never with a `chmod()` afterwards:
+between a create and a `chmod` the secret is on disk with the default
+permissions, and a `chmod` cannot fail loudly enough on a filesystem that
+has no permissions to enforce. So the tool checks the filesystem first, by
+creating a probe file and reading its mode back, and puts the decision to
+the user rather than deciding for them or failing outright — a key on a
+USB stick may be exactly what they want. And it never overwrites: an
+identity is not recoverable once its `enc.key` is gone, so a second run
+refuses and says why. As a CLI program it prints; the library it sits
+beside does not.
+
 Consumers either invoke the tool directly or hook it into their build (the
 diary's root Makefile runs `make -C protocol/keygen` alongside its own
 targets). Details and caveats: [docs.md](docs.md#tool-keygen--generating-key-files).
