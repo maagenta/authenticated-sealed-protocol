@@ -31,6 +31,7 @@ typedef enum {
     PROTO_E_BAD_ALLOWLIST      = -104,  /* allowed_hex is not 64 hex chars   */
     PROTO_E_NO_HANDLER         = -105,  /* handler is NULL                   */
     PROTO_E_BAD_ADDRESS        = -106,  /* bind_addr is not an IPv4 literal  */
+    PROTO_E_BAD_PORT           = -107,  /* port outside 1..65535             */
 
     /* -2xx: resources and initialization */
     PROTO_E_NOMEM              = -201,  /* allocation failed                 */

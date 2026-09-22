@@ -26,6 +26,10 @@ int proto_serve(int port, const char *allowed_hex,
     if (!allowed_hex) return PROTO_E_NO_ALLOWLIST;
     if (strlen(allowed_hex) != AUTH_PK_LEN * 2) return PROTO_E_BAD_ALLOWLIST;
     if (!handler) return PROTO_E_NO_HANDLER;
+    /* The cast to uint16_t below would silently fold 70000 to 4464, and
+     * 0 asks the kernel for any free port — a server that starts fine and
+     * listens where no client will look. Refuse both. */
+    if (port < 1 || port > 65535) return PROTO_E_BAD_PORT;
 
     /* Parse the bind address up front, with the other caller mistakes: a
      * typo in a config file should fail here, not after the port is half

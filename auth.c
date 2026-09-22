@@ -52,6 +52,11 @@ int proto_auth_client(int fd, const proto_keys_t *keys) {
 }
 
 int proto_connect(proto_conn_t *conn, const char *host, int port) {
+    /* getaddrinfo() would reject a port outside the TCP range, but with
+     * the code for a name that does not resolve, which sends the caller
+     * to check the wrong thing. Say what is wrong. */
+    if (port < 1 || port > 65535) return PROTO_E_BAD_PORT;
+
     int rc = proto_init();
     if (rc != PROTO_OK) return rc;
 

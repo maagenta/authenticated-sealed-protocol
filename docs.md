@@ -244,6 +244,7 @@ the sign rule and the successes.
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 hex chars | `proto_serve` |
 | `PROTO_E_NO_HANDLER` | `-105` | `handler` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ADDRESS` | `-106` | `opts->bind_addr` is not an IPv4 dotted literal | `proto_serve` |
+| `PROTO_E_BAD_PORT` | `-107` | `port` is outside 1–65535 | `proto_connect`, `proto_serve` |
 
 **Resources and initialization**
 
@@ -811,15 +812,18 @@ The turnkey client session opener. In one call:
 |---|---|
 | `conn` | session struct; on success `conn->fd` is ready for app commands |
 | `host` | hostname or address |
-| `port` | server port (application policy — the library has no default) |
+| `port` | server port, 1–65535 (application policy — the library has no default) |
 
 **Returns** `PROTO_OK` on success, or the code for the stage that failed —
-`PROTO_E_RESOLVE`, `PROTO_E_SOCKET`, `PROTO_E_CONNECT`, `PROTO_E_REJECTED`,
-`PROTO_E_REGISTER_REJECTED`, or whatever the handshake returned. On failure
-`conn->fd` is left at `-1` and the socket is closed.
+`PROTO_E_BAD_PORT`, `PROTO_E_RESOLVE`, `PROTO_E_SOCKET`, `PROTO_E_CONNECT`,
+`PROTO_E_REJECTED`, `PROTO_E_REGISTER_REJECTED`, or whatever the handshake
+returned. On failure `conn->fd` is left at `-1` and the socket is closed.
 
-The return code says which stage failed: `PROTO_E_RESOLVE` when the name
-has no addresses, `PROTO_E_CONNECT` when every address it has refused,
+The return code says which stage failed: `PROTO_E_BAD_PORT` when `port` is
+out of range (checked first, before anything is resolved — a port parsed
+from an empty variable is `0`, and this is the code that says so, rather
+than a resolve error for a hostname that was fine), `PROTO_E_RESOLVE` when
+the name has no addresses, `PROTO_E_CONNECT` when every address it has refused,
 `PROTO_E_SOCKET` when none of the address families offered exists on this
 host, `PROTO_E_REJECTED` when the server declined the handshake,
 `PROTO_E_REGISTER_REJECTED` when it declined the registration. Pass it to
@@ -919,7 +923,7 @@ The turnkey server. In one call:
 
 | Param | Description |
 |---|---|
-| `port` | TCP port to listen on |
+| `port` | TCP port to listen on, 1–65535. `0` is refused too: the kernel would pick a free port, but `proto_serve` never returns to tell you which, so the server would run where no client can find it |
 | `allowed_hex` | authorized identity (see `proto_load_pubkey_hex`) |
 | `handler` | your per-connection function ([contract](#proto_handler_fn)) |
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
@@ -927,11 +931,12 @@ The turnkey server. In one call:
 
 **Returns** never on success (blocks forever); on fatal setup errors it
 returns `PROTO_E_NO_ALLOWLIST`, `PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`,
-`PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`, `PROTO_E_SOCKET`,
-`PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or
-`PROTO_E_LISTEN`. The allowlist, handler and bind address are checked
-first, before the port is bound, so a misconfigured server fails at startup
-instead of rejecting every connection.
+`PROTO_E_BAD_PORT`, `PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`,
+`PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`,
+`PROTO_E_BIND` or `PROTO_E_LISTEN`. The allowlist, handler, port and bind
+address are checked first, before the port is bound, so a misconfigured
+server fails at startup instead of rejecting every connection — or, worse,
+running on a port nobody expects.
 
 **When not to use it:** threads instead of forks, event loops, several
 authorized keys, pre-auth connection logging, or non-TCP transports — write
