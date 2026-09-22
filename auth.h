@@ -12,11 +12,13 @@ typedef struct {
 } proto_conn_t;
 
 /*
- * Client: TCP-connect to host:port, run the handshake, and on first
- * connection register this identity's encryption public key. conn->keys
- * must be populated (e.g. via proto_load_keys) before calling.
+ * Client: resolve host, TCP-connect to the first of its addresses that
+ * accepts (IPv6 or IPv4, in the resolver's order), run the handshake, and
+ * on first connection register this identity's encryption public key.
+ * conn->keys must be populated (e.g. via proto_load_keys) before calling.
  * Returns PROTO_OK, or the code for the stage that failed: PROTO_E_RESOLVE,
- * PROTO_E_SOCKET, PROTO_E_CONNECT, PROTO_E_REJECTED,
+ * PROTO_E_SOCKET (no offered address family exists on this host),
+ * PROTO_E_CONNECT (every address refused), PROTO_E_REJECTED,
  * PROTO_E_REGISTER_REJECTED, or whatever the handshake returned.
  */
 int proto_connect(proto_conn_t *conn, const char *host, int port);

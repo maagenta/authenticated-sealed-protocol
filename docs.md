@@ -271,9 +271,9 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_SOCKET` | `-501` | `socket()` failed | `proto_connect`, `proto_serve` |
+| `PROTO_E_SOCKET` | `-501` | `socket()` failed — in `proto_connect`, for every address the host resolved to | `proto_connect`, `proto_serve` |
 | `PROTO_E_RESOLVE` | `-502` | `getaddrinfo()` failed | `proto_connect` |
-| `PROTO_E_CONNECT` | `-503` | `connect()` failed | `proto_connect` |
+| `PROTO_E_CONNECT` | `-503` | `connect()` failed for every address the host resolved to | `proto_connect` |
 | `PROTO_E_BIND` | `-504` | `bind()` failed for another reason | `proto_serve` |
 | `PROTO_E_PORT_IN_USE` | `-505` | `bind()` failed with `EADDRINUSE` | `proto_serve` |
 | `PROTO_E_PERM_DENIED` | `-506` | `bind()` denied — `EACCES` or `EPERM` | `proto_serve` |
@@ -795,7 +795,10 @@ int proto_connect(proto_conn_t *conn, const char *host, int port);
 The turnkey client session opener. In one call:
 
 1. initializes libsodium (`proto_init`),
-2. resolves `host` (IPv4/IPv6) and TCP-connects,
+2. resolves `host` and TCP-connects to the first of its addresses that
+   accepts — a name usually has an IPv6 and an IPv4, tried in the
+   resolver's order, so a server reachable on only one of them still
+   connects,
 3. runs the handshake (`HELLO` → `CHALLENGE` → `AUTH`),
 4. if the server answers `REGISTER` (first connection), sends
    `REGISTER <enc_pk b64>` and expects `OK`,
@@ -815,10 +818,18 @@ The turnkey client session opener. In one call:
 `PROTO_E_REGISTER_REJECTED`, or whatever the handshake returned. On failure
 `conn->fd` is left at `-1` and the socket is closed.
 
-The return code says which stage failed: `PROTO_E_RESOLVE` and
-`PROTO_E_CONNECT` for the network, `PROTO_E_REJECTED` when the server
-declined the handshake, `PROTO_E_REGISTER_REJECTED` when it declined the
-registration. Pass it to [`proto_strerror`](#error-codes) for the message.
+The return code says which stage failed: `PROTO_E_RESOLVE` when the name
+has no addresses, `PROTO_E_CONNECT` when every address it has refused,
+`PROTO_E_SOCKET` when none of the address families offered exists on this
+host, `PROTO_E_REJECTED` when the server declined the handshake,
+`PROTO_E_REGISTER_REJECTED` when it declined the registration. Pass it to
+[`proto_strerror`](#error-codes) for the message.
+
+**Silent addresses cost time.** An address that refuses fails at once; one
+that answers nothing (a firewall dropping packets) takes the kernel's own
+`connect` timeout — a minute or two — before the next address is tried,
+and there is no per-call bound on that yet. A name with several such
+addresses waits that long for each.
 
 ### `proto_close`
 

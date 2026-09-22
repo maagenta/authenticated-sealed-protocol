@@ -64,13 +64,26 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
     snprintf(port_str, sizeof(port_str), "%d", port);
     if (getaddrinfo(host, port_str, &hints, &res) != 0) return PROTO_E_RESOLVE;
 
-    conn->fd = socket(res->ai_family, res->ai_socktype, 0);
-    if (conn->fd < 0) { freeaddrinfo(res); return PROTO_E_SOCKET; }
-    if (connect(conn->fd, res->ai_addr, res->ai_addrlen) != 0) {
-        freeaddrinfo(res); close(conn->fd); conn->fd = -1;
-        return PROTO_E_CONNECT;
+    /* A name may resolve to several addresses — an IPv6 and an IPv4, or
+     * several hosts behind one name — and the first is not necessarily
+     * reachable from here: the resolver lists IPv6 first, so a server on
+     * 127.0.0.1 would be unreachable as "localhost" without ever trying
+     * the IPv4. Walk the list in the resolver's order and stop at the
+     * first address that connects. */
+    int fd = -1, tried = 0;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;            /* family not available here; next */
+        tried = 1;
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        close(fd); fd = -1;
     }
     freeaddrinfo(res);
+    /* Every address failed. socket() failing on all of them means no
+     * address family the resolver offered exists on this host; otherwise
+     * at least one was reached and refused, which is the useful error. */
+    if (fd < 0) { conn->fd = -1; return tried ? PROTO_E_CONNECT : PROTO_E_SOCKET; }
+    conn->fd = fd;
 
     sodium_bin2hex(conn->identity_hex, sizeof(conn->identity_hex),
                    conn->keys.auth_pk, AUTH_PK_LEN);
