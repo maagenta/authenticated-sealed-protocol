@@ -62,17 +62,26 @@ int proto_send_line(int fd, const char *line) {
  *
  * Returns the bytes stored (the newline is consumed but not stored) and sets
  * *done when the newline was consumed; 0 at end of stream; -1 on error.
- * EINTR is retried: nothing was consumed, so it is not a failure. Anything
- * that is not a socket (a pipe in a test) has no MSG_PEEK and falls back to
- * one byte at a time. */
-static ssize_t read_line_part(int fd, char *buf, size_t n, int *done) {
+ * EINTR is retried: nothing was consumed, so it is not a failure.
+ *
+ * A descriptor that is not a socket has no MSG_PEEK — a pipe, which is what
+ * a protocol tunnelled through another program's stdin and stdout runs on,
+ * and what a test harness tends to use. There the only way to never take a
+ * byte of the next line is to take one byte at a time. *peekable carries
+ * that verdict between the calls that read one line, so the peek is tried
+ * once per line rather than once per byte; the caller starts it at 1. */
+static ssize_t read_line_part(int fd, char *buf, size_t n, int *done,
+                              int *peekable) {
     *done = 0;
     if (n > READ_CHUNK) n = READ_CHUNK;
 
-    ssize_t seen;
-    do seen = recv(fd, buf, n, MSG_PEEK);
-    while (seen < 0 && errno == EINTR);
-    if (seen < 0 && errno == ENOTSOCK) {
+    ssize_t seen = -1;
+    if (*peekable) {
+        do seen = recv(fd, buf, n, MSG_PEEK);
+        while (seen < 0 && errno == EINTR);
+        if (seen < 0 && errno == ENOTSOCK) *peekable = 0;
+    }
+    if (!*peekable) {
         do seen = read(fd, buf, 1);
         while (seen < 0 && errno == EINTR);
         if (seen == 1 && buf[0] == '\n') { *done = 1; return 0; }
@@ -129,6 +138,7 @@ static int wait_readable(int fd, long long deadline) {
 static int recv_line_until(int fd, char *buf, size_t bufsz, long long deadline) {
     if (bufsz == 0) return PROTO_E_PARAM;   /* no room even for the terminator */
     size_t i = 0;
+    int peekable = 1;                       /* until a recv says otherwise */
     for (;;) {
         /* buf is NUL-terminated on every exit, so a caller that logs it
          * after a failure reads a short string, not stale stack. */
@@ -145,7 +155,7 @@ static int recv_line_until(int fd, char *buf, size_t bufsz, long long deadline) 
             if (r <  0) { buf[i] = '\0'; return PROTO_E_READ; }
         }
         int done;
-        ssize_t n = read_line_part(fd, buf + i, bufsz - 1 - i, &done);
+        ssize_t n = read_line_part(fd, buf + i, bufsz - 1 - i, &done, &peekable);
         if (n <  0)          { buf[i] = '\0'; return PROTO_E_READ; }
         if (n == 0 && !done) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
         i += strip_cr(buf + i, (size_t)n);
@@ -177,6 +187,7 @@ char *proto_recv_line_dyn_status(int fd, int *status) {
 
     size_t sz = MAX_PAYLOAD_BUF < 4096 ? MAX_PAYLOAD_BUF : 4096;
     size_t i = 0;
+    int peekable = 1;                       /* until a recv says otherwise */
     char *buf = malloc(sz);
     if (!buf) { *status = PROTO_E_NOMEM; return NULL; }
     for (;;) {
@@ -191,7 +202,7 @@ char *proto_recv_line_dyn_status(int fd, int *status) {
             sz = want;
         }
         int done;
-        ssize_t n = read_line_part(fd, buf + i, sz - 1 - i, &done);
+        ssize_t n = read_line_part(fd, buf + i, sz - 1 - i, &done, &peekable);
         if (n <  0)          { free(buf); *status = PROTO_E_READ;        return NULL; }
         if (n == 0 && !done) { free(buf); *status = PROTO_E_PEER_CLOSED; return NULL; }
         i += strip_cr(buf + i, (size_t)n);

@@ -504,8 +504,15 @@ on a bare fd — yet never take a byte of the next line: each step peeks at
 what the socket holds (`MSG_PEEK`, up to [`READ_CHUNK`](#constants-protocolh-wireh)
 bytes), finds the newline, and then consumes exactly up to it. A long line
 costs two system calls per chunk rather than one per byte; a short line
-costs its own length. On a descriptor that is not a socket — a pipe, in a
-test — there is no peek, and the readers fall back to one byte at a time.
+costs its own length.
+
+On a descriptor that is not a socket there is no `MSG_PEEK`, so the readers
+fall back to one byte at a time — the only way to stop at the newline
+without swallowing what follows it. That is the case for a pipe: a protocol
+tunnelled through another program's standard input and output, and most
+test harnesses. The peek is attempted once per line, not once per byte, so
+such a descriptor costs what it did before peeking existed: one system call
+per byte. Sockets are what the fast path is for.
 
 ### `proto_send_line`
 

@@ -153,9 +153,17 @@ calibrating only within 64–256 KB: a peek cannot return more than the
 socket holds, so above the receive buffer the size is never filled, while
 below it each long line costs proportionally more calls. Measured on a 64 MB line, the curve is flat from 16 KB upwards and
 only degrades under 4 KB, so the default is already on the plateau and the
-range exists for systems whose buffers are larger. Descriptors that are not
-sockets have no peek and get the old byte-at-a-time read, so a pipe in a
-test still works.
+range exists for systems whose buffers are larger.
+
+Descriptors that are not sockets have no peek, and for them the readers
+keep the byte-at-a-time path: without a way to look before taking, nothing
+else can stop at the newline. A pipe is the real instance — the protocol
+tunnelled through another program's stdin and stdout, or a test harness —
+and it costs one call per byte, what everything cost before. The verdict is
+remembered for the length of one line, in a local the caller passes down,
+so a pipe pays for the failed peek once per line instead of once per byte.
+Doing better would mean a reader that owns a buffer, which is a different
+API from one that takes a bare fd.
 
 The reader that allocates needs a second option, `MAX_PAYLOAD`, for a
 different reason: not cost but exposure. A line has no length prefix, so
