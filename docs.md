@@ -552,7 +552,7 @@ NUL-terminated.
 |---|---|
 | `fd` | connected socket |
 | `buf` | caller buffer |
-| `bufsz` | its size; must be ≥ 1, and `0` is rejected with `PROTO_E_PARAM` |
+| `bufsz` | its size; must be ≥ 1, and `0` is rejected with `PROTO_E_PARAM`. It holds a line of up to `bufsz - 1` characters, that many exactly included — `char[5]` takes `"abcd"` |
 
 **Returns** the line length (≥ 0), or a negative [code](#error-codes):
 `PROTO_E_PEER_CLOSED` if the peer closed, `PROTO_E_READ` on a socket error,
@@ -564,6 +564,13 @@ early and **the rest of the line stays in the socket**, corrupting the next
 read. Use it only for lines with a known small bound (handshake replies,
 `OK`/`FAIL`, list headers). For payload rows use
 [`proto_recv_line_dyn`](#proto_recv_line_dyn).
+
+The limit is exact, and costs one character to establish: when the buffer
+is full the reader takes one more character to see whether the line ended
+there. So a line of exactly `bufsz - 1` characters is returned, and a
+longer one is `PROTO_E_LINE_TOO_LONG` with everything after that one
+character still unread — the stream is past saving either way, which is
+what the pitfall is about.
 
 ```c
 char reply[MAX_LINE];

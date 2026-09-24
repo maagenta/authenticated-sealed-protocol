@@ -143,9 +143,28 @@ static int recv_line_until(int fd, char *buf, size_t bufsz, long long deadline) 
         /* buf is NUL-terminated on every exit, so a caller that logs it
          * after a failure reads a short string, not stale stack. */
         if (i + 1 >= bufsz) {
-            /* Out of room before the newline: the rest of the line is still
-             * in the socket and would surface as a bogus next line. Say so
-             * instead of returning a length that looks like a complete read. */
+            /* The buffer holds all it can. One more character decides which
+             * of two things happened, and the caller's buffer has no room
+             * to hold it, so it is read into a byte on the stack: a newline
+             * means the line ends exactly at the limit and fits; anything
+             * else means it is longer. Without this the line would have to
+             * be one character shorter than the documented limit to pass,
+             * which is not what "longer than bufsz - 1" promises. */
+            if (deadline) {
+                int r = wait_readable(fd, deadline);
+                if (r == 0) { buf[i] = '\0'; return PROTO_E_TIMEOUT; }
+                if (r <  0) { buf[i] = '\0'; return PROTO_E_READ; }
+            }
+            char c;
+            int ended;
+            ssize_t n = read_line_part(fd, &c, 1, &ended, &peekable);
+            if (n <  0)           { buf[i] = '\0'; return PROTO_E_READ; }
+            if (n == 0 && !ended) { buf[i] = '\0'; return PROTO_E_PEER_CLOSED; }
+            if (ended)            { buf[i] = '\0'; return (int)i; }
+            if (c == '\r') continue;     /* not a character of the line */
+            /* Too long. The rest of it is still in the socket, bar this one
+             * character, and would surface as a bogus next line — which is
+             * why this is an error rather than a short read. */
             buf[i] = '\0';
             return PROTO_E_LINE_TOO_LONG;
         }
