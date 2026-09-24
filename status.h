@@ -56,6 +56,7 @@ typedef enum {
     PROTO_E_LISTEN             = -507,  /* listen() failed                   */
     PROTO_E_KEEPALIVE          = -508,  /* SO_KEEPALIVE rejected: no probing */
     PROTO_E_ACCEPT             = -509,  /* listening socket no longer usable */
+    PROTO_E_CONNECT_TIMEOUT    = -510,  /* no answer within the deadline     */
 
     /* -6xx: reading and writing lines */
     PROTO_E_WRITE              = -601,  /* write() failed                    */

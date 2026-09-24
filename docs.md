@@ -147,6 +147,7 @@ Notes:
 |---|---|---|
 | `CHALLENGE_LEN` | 32 | Bytes of random challenge in the handshake. |
 | `MAX_LINE` | 16384 | Suggested buffer size for **control** lines (handshake, `OK`/`FAIL`, headers). Not a payload limit — payload lines should be read with `proto_recv_line_dyn`. |
+| `CONNECT_TIMEOUT_MS` | 10000 | Deadline for connecting to **one** address. A name usually has two, tried in turn, so a host that answers nothing costs this much per address instead of the kernel's own limit (measured: 75 s on macOS). Overridable — see below. |
 | `HANDSHAKE_TIMEOUT_MS` | 10000 | Deadline for each line of the handshake, on both ends. A peer that connects and goes silent fails the handshake after this long instead of holding a client, or a forked server child, forever. Overridable — see below. |
 | `QUIT_TIMEOUT_MS` | 2000 | How long `proto_close` waits for `BYE` after sending `QUIT`. The socket is closed either way; this only bounds the courtesy. Overridable — see below. |
 | `READ_CHUNK` **(in `wire.h`)** | 65536 | Most bytes of a line taken from the socket per system call. A ceiling, not a quantity: a 3-byte line costs 3 bytes. Overridable at compile time, but worth keeping between 64 KB and 256 KB — see below. |
@@ -157,11 +158,11 @@ Notes:
 | `ENC_PK_LEN` | `crypto_box_PUBLICKEYBYTES` (32) | X25519 public key size. |
 | `ENC_SK_LEN` | `crypto_box_SECRETKEYBYTES` (32) | X25519 secret key size. |
 
-**Compile-time options.** Four of the constants above are policy rather
-than fact: the two timeouts, `READ_CHUNK` and `MAX_PAYLOAD`. The right
+**Compile-time options.** Five of the constants above are policy rather
+than fact: the three timeouts, `READ_CHUNK` and `MAX_PAYLOAD`. The right
 values depend on the deployment (LAN vs. mobile links, how patient a server
 should be with strangers, how big the messages are), and that is a decision
-of the project that links the library, not of the library. All four are
+of the project that links the library, not of the library. All five are
 wrapped in `#ifndef`, so a consuming application sets its own from its
 Makefile — or any `-D` on the compiler line — without editing the library's
 headers:
@@ -175,9 +176,9 @@ The values in the headers are the defaults, used only when the build says
 nothing. Every source file must see the same value: put the `-D` in the
 `CFLAGS` used for the whole build, not on a single object.
 
-They live in **two** headers: `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS`
-in `protocol.h`, `READ_CHUNK` and `MAX_PAYLOAD` in `wire.h`. The split is
-deliberate —
+They live in **two** headers: `CONNECT_TIMEOUT_MS`, `HANDSHAKE_TIMEOUT_MS`
+and `QUIT_TIMEOUT_MS` in `protocol.h`, `READ_CHUNK` and `MAX_PAYLOAD` in
+`wire.h`. The split is deliberate —
 `protocol.h` includes libsodium for the key sizes, and `wire` is the one
 module that compiles against libc alone, so a constant it needs cannot come
 from there. Where you write the `-D` makes no difference either way.
@@ -362,6 +363,7 @@ the sign rule and the successes.
 | `PROTO_E_LISTEN` | `-507` | `listen()` failed | `proto_serve` |
 | `PROTO_E_KEEPALIVE` | `-508` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
 | `PROTO_E_ACCEPT` | `-509` | `accept()` failed in a way no retry can fix: the listening socket is unusable | `proto_serve` (after startup) |
+| `PROTO_E_CONNECT_TIMEOUT` | `-510` | no address answered within `CONNECT_TIMEOUT_MS` — silence, not a refusal | `proto_connect` |
 
 **Reading and writing lines**
 
@@ -938,8 +940,9 @@ The turnkey client session opener. In one call:
 1. initializes libsodium (`proto_init`),
 2. resolves `host` and TCP-connects to the first of its addresses that
    accepts — a name usually has an IPv6 and an IPv4, tried in the
-   resolver's order, so a server reachable on only one of them still
-   connects,
+   resolver's order, each given `CONNECT_TIMEOUT_MS`, so a server
+   reachable on only one of them still connects and a silent one does not
+   hold the call,
 3. runs the handshake (`HELLO` → `CHALLENGE` → `AUTH`),
 4. if the server answers `REGISTER` (first connection), sends
    `REGISTER <enc_pk b64>` and expects `OK`,
@@ -957,24 +960,37 @@ socket this library opened — see [`proto_conn_t`](#proto_conn_t).
 
 **Returns** `PROTO_OK` on success, or the code for the stage that failed —
 `PROTO_E_BAD_PORT`, `PROTO_E_RESOLVE`, `PROTO_E_SOCKET`, `PROTO_E_CONNECT`,
-`PROTO_E_REJECTED`, `PROTO_E_REGISTER_REJECTED`, or whatever the handshake
-returned. On failure `conn->fd` is left at `-1` and the socket is closed.
+`PROTO_E_CONNECT_TIMEOUT`, `PROTO_E_REJECTED`, `PROTO_E_REGISTER_REJECTED`,
+or whatever the handshake returned. On failure `conn->fd` is left at `-1`
+and the socket is closed.
 
-The return code says which stage failed: `PROTO_E_BAD_PORT` when `port` is
-out of range (checked first, before anything is resolved — a port parsed
-from an empty variable is `0`, and this is the code that says so, rather
-than a resolve error for a hostname that was fine), `PROTO_E_RESOLVE` when
-the name has no addresses, `PROTO_E_CONNECT` when every address it has refused,
-`PROTO_E_SOCKET` when none of the address families offered exists on this
-host, `PROTO_E_REJECTED` when the server declined the handshake,
-`PROTO_E_REGISTER_REJECTED` when it declined the registration. Pass it to
+The code says which stage failed, and each points the user somewhere
+different:
+
+| Code | What happened | What to look at |
+|---|---|---|
+| `PROTO_E_BAD_PORT` | `port` outside 1–65535, checked before anything is resolved — a port parsed from an empty variable is `0`, and this says so rather than blaming a hostname that was fine | the configuration |
+| `PROTO_E_RESOLVE` | the name has no addresses | the name, DNS |
+| `PROTO_E_SOCKET` | none of the address families offered exists on this host | IPv6 availability |
+| `PROTO_E_CONNECT_TIMEOUT` | no address answered within `CONNECT_TIMEOUT_MS` | the network, a firewall, whether the host is up |
+| `PROTO_E_CONNECT` | an address answered, refusing | whether the server is running, and on which port |
+| `PROTO_E_TIMEOUT` | connected, then the server went silent mid-handshake | the server process itself |
+| `PROTO_E_REJECTED` | the server declined the handshake | the allowlist — is this identity authorized |
+| `PROTO_E_REGISTER_REJECTED` | it declined the registration | the server's registration policy |
+
+A refusal anywhere outweighs silence: if one address refuses and another
+never answers, the result is `PROTO_E_CONNECT`, because something being
+there and saying no is the more useful fact. Pass any of them to
 [`proto_strerror`](#error-codes) for the message.
 
-**Silent addresses cost time.** An address that refuses fails at once; one
-that answers nothing (a firewall dropping packets) takes the kernel's own
-`connect` timeout — a minute or two — before the next address is tried,
-and there is no per-call bound on that yet. A name with several such
-addresses waits that long for each.
+**Silent addresses cost time, but a bounded amount.** An address that
+refuses fails at once; one that answers nothing — a firewall dropping
+packets — is given [`CONNECT_TIMEOUT_MS`](#constants-protocolh-wireh)
+(10 s) before the next address is tried. Without that bound it would be
+the kernel's own limit: measured at 75 s per address on macOS, and about
+twice that on Linux. The deadline is per address, not per call, because
+the point of trying them all is that a dead one must not hide a live one;
+a name with two silent addresses therefore waits twice.
 
 ### `proto_close`
 

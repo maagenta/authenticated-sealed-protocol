@@ -23,9 +23,10 @@ typedef struct {
  * If conn still holds a connection it is closed first (as proto_close
  * would), so calling this again is how a client reconnects.
  * Returns PROTO_OK, or the code for the stage that failed: PROTO_E_BAD_PORT
- * (port outside 1..65535), PROTO_E_RESOLVE,
+ * (port outside 1..65535), PROTO_E_RESOLVE (the name has no addresses),
  * PROTO_E_SOCKET (no offered address family exists on this host),
- * PROTO_E_CONNECT (every address refused), PROTO_E_REJECTED,
+ * PROTO_E_CONNECT (an address refused), PROTO_E_CONNECT_TIMEOUT (no address
+ * answered within CONNECT_TIMEOUT_MS), PROTO_E_REJECTED,
  * PROTO_E_REGISTER_REJECTED, or whatever the handshake returned.
  */
 int proto_connect(proto_conn_t *conn, const char *host, int port);

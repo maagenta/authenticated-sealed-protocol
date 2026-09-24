@@ -63,9 +63,10 @@ specification of the handshake. It defines:
 
 - `CHALLENGE_LEN` (32) and `MAX_LINE` (16384, a guideline for *control*
   lines, not a payload limit);
-- `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS`, the two timeouts the
-  handshake and the goodbye run under, each wrapped in `#ifndef` so a
-  consuming build can set its own with `-D`;
+- `CONNECT_TIMEOUT_MS`, `HANDSHAKE_TIMEOUT_MS` and `QUIT_TIMEOUT_MS` — the
+  three timeouts that bound reaching a peer, talking to it and taking
+  leave of it — each wrapped in `#ifndef` so a consuming build can set its
+  own with `-D`;
 - the libsodium key-size aliases (`AUTH_PK_LEN`, `AUTH_SK_LEN`,
   `AUTH_SIG_LEN`, `ENC_PK_LEN`, `ENC_SK_LEN`).
 
@@ -212,6 +213,20 @@ live here so the handshake logic can never drift apart:
 
 Note the asymmetry: the client side has a turnkey call, the server side only
 the primitive — because the server's turnkey wrapper is the next module.
+
+`proto_connect` bounds the one step no other timeout covers. Reading is
+bounded by the handshake deadline, but reaching the peer at all was the
+kernel's business: an address that refuses fails instantly, while one that
+answers nothing costs whatever the system decides — measured here at 75 s
+on macOS, roughly double on Linux, and that per address since the resolver
+usually offers two. So the attempt runs on a briefly non-blocking socket
+with `poll()` and `CONNECT_TIMEOUT_MS`, and the fd is blocking again before
+the handshake, which depends on it. The deadline is per address rather than
+per call because the point of walking the list is that a dead address must
+not hide a live one. Silence and refusal are reported apart —
+`PROTO_E_CONNECT_TIMEOUT` and `PROTO_E_CONNECT` — because they send whoever
+reads the message to different places: the network, or the server. A
+refusal anywhere wins, being the more definite fact.
 
 A conn holds one connection, and `proto_connect` enforces it: called on a
 conn that still has a socket, it closes that socket before opening the new

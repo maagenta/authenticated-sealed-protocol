@@ -22,6 +22,14 @@
  * this header pulls in libsodium for the key sizes below.
  */
 
+/* Bound on connecting to one address. The addresses behind a name are tried
+ * in turn, so the worst case is this times how many it has — usually one or
+ * two. Without it the wait is the kernel's own: 75 s on macOS, about two
+ * minutes on Linux, and that per address. */
+#ifndef CONNECT_TIMEOUT_MS
+#define CONNECT_TIMEOUT_MS   10000
+#endif
+
 /* Bound on each handshake line, on either end. Three tiny round trips:
  * generous for a client on a poor link, short for a peer that connected
  * and went quiet. */

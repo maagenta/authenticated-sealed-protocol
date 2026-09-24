@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -63,6 +67,56 @@ static int is_socket(int fd) {
     return fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode);
 }
 
+/* Milliseconds on a clock that never jumps, for deadlines. (wire.c keeps
+ * its own copy: six lines are cheaper than a public function nothing but
+ * this file would call.) */
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* connect() with a deadline. An address that refuses fails at once, but one
+ * that answers nothing — a firewall dropping packets — would otherwise cost
+ * the kernel's own limit, 75 s on macOS and about two minutes on Linux, and
+ * that once per address the name resolves to.
+ *
+ * The socket is non-blocking for the attempt only: everything above this
+ * layer is documented as blocking, and the handshake that follows depends
+ * on it. Returns 0 connected, 1 out of time, -1 refused or failed. */
+static int connect_timeout(int fd, const struct sockaddr *addr,
+                           socklen_t len, int ms) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
+
+    int result = -1;
+    if (connect(fd, addr, len) == 0) {
+        result = 0;                      /* a local socket can finish at once */
+    } else if (errno == EINPROGRESS) {
+        long long deadline = now_ms() + ms;
+        for (;;) {
+            long long left = deadline - now_ms();
+            if (left <= 0) { result = 1; break; }
+            struct pollfd p = { .fd = fd, .events = POLLOUT };
+            int n = poll(&p, 1, (int)left);
+            if (n < 0 && errno == EINTR) continue;   /* a signal, not an answer */
+            if (n <= 0) { result = n == 0 ? 1 : -1; break; }
+            /* Writable means the attempt has finished, one way or the
+             * other; SO_ERROR says which. */
+            int err = 0;
+            socklen_t errlen = sizeof err;
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0) {
+                result = -1;
+            } else {
+                result = err == 0 ? 0 : -1;
+            }
+            break;
+        }
+    }
+    fcntl(fd, F_SETFL, flags);           /* blocking again, connected or not */
+    return result;
+}
+
 int proto_connect(proto_conn_t *conn, const char *host, int port) {
     /* getaddrinfo() would reject a port outside the TCP range, but with
      * the code for a name that does not resolve, which sends the caller
@@ -98,19 +152,27 @@ int proto_connect(proto_conn_t *conn, const char *host, int port) {
      * 127.0.0.1 would be unreachable as "localhost" without ever trying
      * the IPv4. Walk the list in the resolver's order and stop at the
      * first address that connects. */
-    int fd = -1, tried = 0;
+    int fd = -1, tried = 0, refused = 0;
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) continue;            /* family not available here; next */
         tried = 1;
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        int c = connect_timeout(fd, ai->ai_addr, ai->ai_addrlen,
+                                CONNECT_TIMEOUT_MS);
+        if (c == 0) break;
+        if (c < 0) refused = 1;          /* a definite answer, unlike silence */
         close(fd); fd = -1;
     }
     freeaddrinfo(res);
-    /* Every address failed. socket() failing on all of them means no
-     * address family the resolver offered exists on this host; otherwise
-     * at least one was reached and refused, which is the useful error. */
-    if (fd < 0) { conn->fd = -1; return tried ? PROTO_E_CONNECT : PROTO_E_SOCKET; }
+    /* Every address failed. socket() failing on all of them means no address
+     * family the resolver offered exists on this host. Otherwise, a refusal
+     * anywhere is the useful diagnosis — something is there and not
+     * listening — and only silence everywhere is reported as a timeout. */
+    if (fd < 0) {
+        conn->fd = -1;
+        if (!tried) return PROTO_E_SOCKET;
+        return refused ? PROTO_E_CONNECT : PROTO_E_CONNECT_TIMEOUT;
+    }
     conn->fd = fd;
 
     sodium_bin2hex(conn->identity_hex, sizeof(conn->identity_hex),
