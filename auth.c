@@ -223,12 +223,27 @@ void proto_close(proto_conn_t *conn) {
     conn->fd = -1;
 }
 
+/* Whether s is an identity as this library writes one: 64 lowercase hex
+ * characters, which is what sodium_bin2hex produces and what the peer's key
+ * is compared against below. Length alone is not enough: an allowlist in
+ * uppercase, or not hex at all, has the right length and matches nobody,
+ * so every client would be refused while the server looks healthy. The
+ * loop stops at the first non-hex character, the terminator included, so a
+ * short string is never read past its end. (serve.c keeps its own copy,
+ * for the same reason as now_ms above.) */
+static int is_identity_hex(const char *s) {
+    for (size_t i = 0; i < AUTH_PK_LEN * 2; i++)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+            return 0;
+    return s[AUTH_PK_LEN * 2] == '\0';
+}
+
 char *proto_auth_server(int fd, const char *allowed_hex) {
     char line[MAX_LINE];
 
     /* Without a well-formed allowlist there is nobody to compare against, so
      * no peer could ever authenticate. Say so before spending a handshake. */
-    if (!allowed_hex || strlen(allowed_hex) != AUTH_PK_LEN * 2) {
+    if (!allowed_hex || !is_identity_hex(allowed_hex)) {
         proto_send_line(fd, "FAIL internal error");
         return NULL;
     }

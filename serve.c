@@ -19,6 +19,17 @@ static void reap_children(int sig) {
     while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 
+/* 64 lowercase hex characters, the only form an identity takes. A copy of
+ * the one in auth.c, which explains why length alone is not enough; this
+ * one runs first, so a bad allowlist stops the server before the port is
+ * bound instead of refusing every client from inside a child. */
+static int is_identity_hex(const char *s) {
+    for (size_t i = 0; i < AUTH_PK_LEN * 2; i++)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+            return 0;
+    return s[AUTH_PK_LEN * 2] == '\0';
+}
+
 int proto_serve(int port, const char *allowed_hex,
                 proto_handler_fn handler, void *ctx,
                 const proto_serve_opts_t *opts) {
@@ -26,7 +37,7 @@ int proto_serve(int port, const char *allowed_hex,
      * serve anyone: refuse to start rather than bind a port and fail every
      * connection. */
     if (!allowed_hex) return PROTO_E_NO_ALLOWLIST;
-    if (strlen(allowed_hex) != AUTH_PK_LEN * 2) return PROTO_E_BAD_ALLOWLIST;
+    if (!is_identity_hex(allowed_hex)) return PROTO_E_BAD_ALLOWLIST;
     if (!handler) return PROTO_E_NO_HANDLER;
     /* The cast to uint16_t below would silently fold 70000 to 4464, and
      * 0 asks the kernel for any free port — a server that starts fine and

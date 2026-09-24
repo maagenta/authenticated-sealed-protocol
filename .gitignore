@@ -26,3 +26,6 @@ core
 *.exe
 *.out
 *.gch
+
+# Personal folders
+_notes

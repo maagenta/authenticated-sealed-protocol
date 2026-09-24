@@ -9,7 +9,7 @@ const char *proto_strerror(int code) {
     case PROTO_E_PARAM:             return "invalid argument";
     case PROTO_E_BUFFER_TOO_SMALL:  return "buffer too small for the result";
     case PROTO_E_NO_ALLOWLIST:      return "no allowlist configured";
-    case PROTO_E_BAD_ALLOWLIST:     return "allowlist is not 64 hex characters";
+    case PROTO_E_BAD_ALLOWLIST:     return "allowlist is not 64 lowercase hex characters";
     case PROTO_E_NO_HANDLER:        return "no connection handler given";
     case PROTO_E_BAD_ADDRESS:       return "bind address is not an IPv4 literal";
     case PROTO_E_BAD_PORT:          return "port is not in 1..65535";

@@ -326,7 +326,7 @@ the sign rule and the successes.
 | `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0` |
 | `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
-| `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 hex chars | `proto_serve` |
+| `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 lowercase hex chars — uppercase is refused too, since it would match no identity | `proto_serve` |
 | `PROTO_E_NO_HANDLER` | `-105` | `handler` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ADDRESS` | `-106` | `opts->bind_addr` is not an IPv4 dotted literal | `proto_serve` |
 | `PROTO_E_BAD_PORT` | `-107` | `port` is outside 1–65535 | `proto_connect`, `proto_serve` |
@@ -1064,7 +1064,7 @@ client's signature, and compares the client's identity against
 | Param | Description |
 |---|---|
 | `fd` | freshly accepted socket |
-| `allowed_hex` | the one authorized identity — 64 hex chars, from [`proto_load_pubkey_hex`](#proto_load_pubkey_hex). `NULL` is rejected with `FAIL internal error` before the handshake starts |
+| `allowed_hex` | the one authorized identity — 64 lowercase hex chars, from [`proto_load_pubkey_hex`](#proto_load_pubkey_hex). `NULL`, or anything else — uppercase, not hex, the wrong length — is rejected with `FAIL internal error` before the handshake starts |
 
 **Returns** the authenticated identity hex (heap; caller **frees**), or
 `NULL` on failure. On every failure path a descriptive `FAIL <reason>` line
@@ -1115,7 +1115,7 @@ reply.
 | Param | Description |
 |---|---|
 | `port` | TCP port to listen on, 1–65535. `0` is refused too: the kernel would pick a free port, but `proto_serve` never returns to tell you which, so the server would run where no client can find it |
-| `allowed_hex` | authorized identity (see `proto_load_pubkey_hex`) |
+| `allowed_hex` | authorized identity, 64 lowercase hex chars (see `proto_load_pubkey_hex`); anything else fails with `PROTO_E_BAD_ALLOWLIST` |
 | `handler` | your per-connection function ([contract](#proto_handler_fn)) |
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
 | `opts` | deployment options ([`proto_serve_opts_t`](#proto_serve_opts_t)); `NULL` for all defaults |
