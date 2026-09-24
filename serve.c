@@ -14,9 +14,19 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+/* Collect every child that has exited. A handler runs between any two
+ * instructions of the code it interrupts, and the loop below ends with
+ * waitpid() failing with ECHILD once no children are left. Without
+ * restoring errno, a child exiting just after accept() failed would turn
+ * EMFILE into ECHILD, and the accept loop — which reads errno to tell a
+ * passing shortage from a broken socket — would return PROTO_E_ACCEPT and
+ * stop a server that was fine. Running out of descriptors is exactly when
+ * children exiting is to be expected. */
 static void reap_children(int sig) {
     (void)sig;
+    int saved = errno;
     while (waitpid(-1, NULL, WNOHANG) > 0);
+    errno = saved;
 }
 
 /* 64 lowercase hex characters, the only form an identity takes. A copy of
