@@ -249,7 +249,10 @@ Both options refuse nonsense **at build time**: `MAX_PAYLOAD` must be
 between 64 bytes and 1 GiB, `READ_CHUNK` at least 1. A `0` slipping in from
 an empty Makefile variable would otherwise leave every read failing —
 `PROTO_E_LINE_TOO_LONG` for one, `PROTO_E_PEER_CLOSED` for the other —
-with nothing to point at the cause.
+with nothing to point at the cause. The timeouts are checked the same way,
+and for a sharper reason: a negative `HANDSHAKE_TIMEOUT_MS` reads as *no
+deadline* and would quietly restore the defect the constant exists to
+prevent, leaving a silent peer holding a forked child for good.
 
 `protocol.h` also documents the shared handshake wire format (see
 [appendix](#wire-protocol-appendix)).
@@ -363,7 +366,7 @@ the sign rule and the successes.
 | `PROTO_E_LISTEN` | `-507` | `listen()` failed | `proto_serve` |
 | `PROTO_E_KEEPALIVE` | `-508` | `SO_KEEPALIVE` rejected — no probing at all | `proto_keepalive` |
 | `PROTO_E_ACCEPT` | `-509` | `accept()` failed in a way no retry can fix: the listening socket is unusable | `proto_serve` (after startup) |
-| `PROTO_E_CONNECT_TIMEOUT` | `-510` | no address answered within `CONNECT_TIMEOUT_MS` — silence, not a refusal | `proto_connect` |
+| `PROTO_E_CONNECT_TIMEOUT` | `-510` | no address answered — silence, not a refusal. Either `CONNECT_TIMEOUT_MS` passed, or the kernel gave up first, which is what happens when its own limit (75 s here) is shorter | `proto_connect` |
 
 **Reading and writing lines**
 
@@ -972,7 +975,7 @@ different:
 | `PROTO_E_BAD_PORT` | `port` outside 1–65535, checked before anything is resolved — a port parsed from an empty variable is `0`, and this says so rather than blaming a hostname that was fine | the configuration |
 | `PROTO_E_RESOLVE` | the name has no addresses | the name, DNS |
 | `PROTO_E_SOCKET` | none of the address families offered exists on this host | IPv6 availability |
-| `PROTO_E_CONNECT_TIMEOUT` | no address answered within `CONNECT_TIMEOUT_MS` | the network, a firewall, whether the host is up |
+| `PROTO_E_CONNECT_TIMEOUT` | no address answered — the deadline passed, or the kernel gave up first | the network, a firewall, whether the host is up |
 | `PROTO_E_CONNECT` | an address answered, refusing | whether the server is running, and on which port |
 | `PROTO_E_TIMEOUT` | connected, then the server went silent mid-handshake | the server process itself |
 | `PROTO_E_REJECTED` | the server declined the handshake | the allowlist — is this identity authorized |

@@ -92,7 +92,9 @@ static int connect_timeout(int fd, const struct sockaddr *addr,
     int result = -1;
     if (connect(fd, addr, len) == 0) {
         result = 0;                      /* a local socket can finish at once */
-    } else if (errno == EINPROGRESS) {
+        /* EINTR is not a failure here: the attempt carries on in the kernel
+         * and is waited for exactly as EINPROGRESS is. */
+    } else if (errno == EINPROGRESS || errno == EINTR) {
         long long deadline = now_ms() + ms;
         for (;;) {
             long long left = deadline - now_ms();
@@ -102,18 +104,22 @@ static int connect_timeout(int fd, const struct sockaddr *addr,
             if (n < 0 && errno == EINTR) continue;   /* a signal, not an answer */
             if (n <= 0) { result = n == 0 ? 1 : -1; break; }
             /* Writable means the attempt has finished, one way or the
-             * other; SO_ERROR says which. */
+             * other; SO_ERROR says which. ETIMEDOUT is the kernel having
+             * given up first — silence, not a refusal — which happens
+             * whenever its own limit is shorter than ms. */
             int err = 0;
             socklen_t errlen = sizeof err;
-            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0) {
-                result = -1;
-            } else {
-                result = err == 0 ? 0 : -1;
-            }
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0) result = -1;
+            else if (err == 0)            result = 0;
+            else if (err == ETIMEDOUT)    result = 1;
+            else                          result = -1;
             break;
         }
     }
-    fcntl(fd, F_SETFL, flags);           /* blocking again, connected or not */
+    /* Blocking again, connected or not. If even that fails the descriptor
+     * is unusable for a handshake that assumes blocking reads, so treat it
+     * as a failed attempt rather than hand it back. */
+    if (fcntl(fd, F_SETFL, flags) < 0) return -1;
     return result;
 }
 

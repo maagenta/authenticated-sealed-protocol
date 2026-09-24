@@ -29,6 +29,11 @@
 #ifndef CONNECT_TIMEOUT_MS
 #define CONNECT_TIMEOUT_MS   10000
 #endif
+/* Zero or less would fail every connection the moment it is attempted,
+ * including to a server that is listening. Fail the build instead. */
+#if CONNECT_TIMEOUT_MS < 1
+#error "CONNECT_TIMEOUT_MS must be at least 1"
+#endif
 
 /* Bound on each handshake line, on either end. Three tiny round trips:
  * generous for a client on a poor link, short for a peer that connected
@@ -36,12 +41,26 @@
 #ifndef HANDSHAKE_TIMEOUT_MS
 #define HANDSHAKE_TIMEOUT_MS  10000
 #endif
+/* A negative value reads as "no deadline" to proto_recv_line_timeout, which
+ * would quietly restore the defect this constant exists to prevent: a peer
+ * that connects and says nothing holding a forked child for good. Zero
+ * would fail every handshake instead. Neither is a thing to discover at
+ * runtime. */
+#if HANDSHAKE_TIMEOUT_MS < 1
+#error "HANDSHAKE_TIMEOUT_MS must be at least 1"
+#endif
 
 /* Courtesy wait for BYE after QUIT. The close that follows ends the
  * connection regardless, so this only bounds how long a polite goodbye
  * may take. */
 #ifndef QUIT_TIMEOUT_MS
 #define QUIT_TIMEOUT_MS        2000
+#endif
+/* Zero is meaningful here — close without waiting for BYE at all — but a
+ * negative value would read as "no deadline" and wait for a goodbye that
+ * may never come. */
+#if QUIT_TIMEOUT_MS < 0
+#error "QUIT_TIMEOUT_MS must not be negative (0 means do not wait)"
 #endif
 
 /* libsodium key sizes */
