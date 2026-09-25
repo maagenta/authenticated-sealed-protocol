@@ -132,6 +132,14 @@ int proto_serve(int port, const char *allowed_hex,
         }
         if (pid == 0) {
             close(srv);
+            /* The reaper is the parent's: it collects the connections' children.
+             * Inherited, it would collect the handler's own — a popen() whose
+             * pclose() then fails with ECHILD every time, a waitpid() that never
+             * sees its child's status — since it waits for any child the moment
+             * one exits. The child has no children of the library's to reap, so
+             * it gets the default back. SIGPIPE stays ignored: that one protects
+             * the handler's own writes. */
+            signal(SIGCHLD, SIG_DFL);
             char *user = proto_auth_server(cli, allowed_hex);
             if (user) {
                 handler(cli, user, ctx);

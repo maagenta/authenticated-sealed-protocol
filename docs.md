@@ -463,6 +463,12 @@ authenticated successfully**.
 When the handler returns, the child closes the socket and exits. Anything the
 handler changes in memory is lost — persist through your storage.
 
+**Signals in the child.** `SIGPIPE` is ignored, so a write of your own to a
+closed peer fails with `EPIPE` instead of killing the child. `SIGCHLD` is at
+its default: the parent's reaper is not inherited, so a handler that runs
+other programs — `popen`/`pclose`, `system`, its own `fork` and `waitpid` —
+gets their exit status as in any C program.
+
 ### `proto_serve_opts_t`
 
 ```c
@@ -1095,10 +1101,11 @@ int proto_serve(int port, const char *allowed_hex,
 The turnkey server. In one call:
 
 1. initializes libsodium,
-2. ignores `SIGPIPE`, installs a `SIGCHLD` reaper (no zombies),
+2. ignores `SIGPIPE`, installs a `SIGCHLD` reaper in the parent (no zombies),
 3. creates the listening socket (`SO_REUSEADDR`, backlog 16, on
    `opts->bind_addr` or every interface),
-4. loops: `accept` → `fork` → in the child, authenticate with
+4. loops: `accept` → `fork` → in the child, restore `SIGCHLD`'s default
+   (see [signals in the child](#proto_handler_fn)), authenticate with
    [`proto_auth_server`](#proto_auth_server) → on success call
    `handler(fd, identity_hex, ctx)` → close and `_exit`.
 
