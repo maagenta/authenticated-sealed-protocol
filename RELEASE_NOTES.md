@@ -8,13 +8,14 @@ Four things: every `int`-returning function now returns a named reason instead o
 
 ### Error codes
 
-New module `status` — the `proto_status_t` enum (36 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
+New module `status` — the `proto_status_t` enum (37 values) and `proto_strerror()`, which turns any of them into a sentence. It is a status type, not an error type: alongside the failures it names the three successes that carry information.
 
 - **`rc < 0` means failure, always.** Failures are negative; success is `0` or positive. `proto_recv_line` returns a line length, `proto_auth_client` returns `PROTO_REGISTER_REQUESTED` when the server wants our encryption key, and `proto_keepalive` returns `PROTO_KEEPALIVE_DEFAULTED` when probing works but a timing knob kept the system value. Adopting the codes costs a recompile, not an audit.
 - **The library stopped printing.** `crypto.c` used to write "Error: could not open …" to `stderr`, deciding for every consumer where its diagnostics appeared — useless to a daemon with structured logging or to a GUI. The reason now travels in the return value and the application formats it.
 - **A documented pitfall is gone.** `proto_connect` could not distinguish "network down" from "access denied"; `PROTO_E_RESOLVE`, `PROTO_E_CONNECT`, `PROTO_E_REJECTED` and `PROTO_E_REGISTER_REJECTED` now say which stage failed.
 - **`bind` failures are classified.** `PROTO_E_PORT_IN_USE` and `PROTO_E_PERM_DENIED` come from reading `errno` before `close()` can clobber it — between them they cover almost every real startup failure.
 - **EOF is distinguishable from an error.** `PROTO_E_PEER_CLOSED` for a clean close, `PROTO_E_READ` for a failed read.
+- **A damaged key file says so where it is loaded.** `auth.key` holds the Ed25519 seed and a copy of the public key derived from it, and `proto_load_keys` used to trust the copy. A file whose copy was wrong — one base64 character changed while copying it by hand keeps the size right and decodes fine — loaded as success, and the failure surfaced at the server as `PROTO_E_REJECTED`, which sends the user to check the allowlist. The copy is now checked against the key derived from the seed, and a mismatch fails the load with the new `PROTO_E_KEY_MISMATCH` (-304).
 
 Failure values are grouped in hundreds by family — `-1xx` caller mistakes, `-2xx` resources, `-3xx` key files, `-4xx` cryptography, `-5xx` sockets, `-6xx` lines, `-7xx` handshake — sequential within each range and never reused, so the documented tables stay ordered as codes are added. Values are stable from this release on. Every code has a message, and `proto_strerror` answers for unknown values too, so any return value can be passed straight through.
 

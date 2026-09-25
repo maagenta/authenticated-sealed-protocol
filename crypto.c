@@ -45,8 +45,22 @@ int proto_load_keys(const char *auth_sk_path,
     int rc = read_b64_key(auth_sk_path, out->auth_sk, AUTH_SK_LEN);
     if (rc != PROTO_OK) return rc;
 
-    /* In libsodium, auth_sk = seed(32) || pubkey(32) */
-    memcpy(out->auth_pk, out->auth_sk + 32, AUTH_PK_LEN);
+    /* In libsodium, auth_sk = seed(32) || pubkey(32), and the seed alone
+     * determines both keys: the second half is a copy, which a file written
+     * by another tool, or edited by hand, can get wrong. Nothing would notice
+     * until the server refused the signature — a refusal that reads as "not
+     * authorized" and sends the user to check the allowlist instead of this
+     * file. Derive the public key from the seed and refuse a file whose copy
+     * disagrees. */
+    unsigned char seed[crypto_sign_SEEDBYTES], sk[AUTH_SK_LEN];
+    crypto_sign_ed25519_sk_to_seed(seed, out->auth_sk);
+    crypto_sign_seed_keypair(out->auth_pk, sk, seed);
+    sodium_memzero(seed, sizeof seed);
+    sodium_memzero(sk, sizeof sk);
+    if (memcmp(out->auth_pk, out->auth_sk + 32, AUTH_PK_LEN) != 0) {
+        sodium_memzero(out->auth_sk, AUTH_SK_LEN);   /* not a key to keep around */
+        return PROTO_E_KEY_MISMATCH;
+    }
 
     /* X25519 encryption private key (32 bytes) */
     rc = read_b64_key(enc_sk_path, out->enc_sk, ENC_SK_LEN);

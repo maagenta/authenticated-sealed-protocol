@@ -19,8 +19,11 @@ typedef struct {
 int proto_init(void);
 
 /* Load both private keys (base64, one per file) and derive the public keys.
- * Returns PROTO_OK, or PROTO_E_KEY_OPEN / PROTO_E_KEY_EMPTY /
- * PROTO_E_KEY_FORMAT — which of the two files failed is not reported. */
+ * The copy of the public key that an Ed25519 secret key file carries is
+ * checked against the one derived from its seed. Returns PROTO_OK, or
+ * PROTO_E_KEY_OPEN / PROTO_E_KEY_EMPTY / PROTO_E_KEY_FORMAT — which of the
+ * two files failed is not reported — or PROTO_E_KEY_MISMATCH, which only
+ * the auth key file can cause: the file is damaged. */
 int proto_load_keys(const char *auth_sk_path,
                     const char *enc_sk_path,
                     proto_keys_t *out);

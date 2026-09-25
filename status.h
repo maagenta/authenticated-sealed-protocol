@@ -41,6 +41,7 @@ typedef enum {
     PROTO_E_KEY_OPEN           = -301,  /* could not open the key file       */
     PROTO_E_KEY_EMPTY          = -302,  /* key file is empty                 */
     PROTO_E_KEY_FORMAT         = -303,  /* not base64 of the expected size   */
+    PROTO_E_KEY_MISMATCH       = -304,  /* public half does not match secret */
 
     /* -4xx: cryptography */
     PROTO_E_CRYPTO             = -401,  /* libsodium operation failed        */

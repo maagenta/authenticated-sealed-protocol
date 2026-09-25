@@ -127,7 +127,11 @@ Notes:
 
 - The Ed25519 **public** key is embedded in the last 32 bytes of `auth.key`,
   so the client only ever loads secret-key files; publics are derived
-  (`proto_load_keys` does this).
+  (`proto_load_keys` does this). The embedded copy is checked against the
+  key derived from the seed, and a file whose two halves disagree — one
+  character changed while copying it by hand is enough — is refused with
+  `PROTO_E_KEY_MISMATCH` instead of loading and being refused by the server
+  later, where it would look like an authorization problem.
 - The X25519 public key is derived from `enc.key` via `crypto_scalarmult_base`
   — there is no `enc.pub` file. The server learns it through the `REGISTER`
   step instead.
@@ -345,6 +349,7 @@ the sign rule and the successes.
 | `PROTO_E_KEY_OPEN` | `-301` | could not open the file | `proto_load_keys`, `proto_load_pubkey_hex` |
 | `PROTO_E_KEY_EMPTY` | `-302` | file is empty | idem |
 | `PROTO_E_KEY_FORMAT` | `-303` | not base64 of the expected size | idem |
+| `PROTO_E_KEY_MISMATCH` | `-304` | `auth.key` is damaged: the public key it carries does not match the one its seed derives | `proto_load_keys` |
 
 **Cryptography**
 
@@ -807,7 +812,9 @@ derive both public keys into `out`.
 
 **Returns** `PROTO_OK`, or `PROTO_E_KEY_OPEN`, `PROTO_E_KEY_EMPTY` or
 `PROTO_E_KEY_FORMAT`. The code says what went wrong but not which of the two
-files: call it once per file if you need that distinction. Nothing is
+files: call it once per file if you need that distinction. The exception is
+`PROTO_E_KEY_MISMATCH`, which only `auth.key` can cause: its public half
+does not match its seed, so the file is damaged. Nothing is
 printed — pass the code to [`proto_strerror`](#error-codes) and log it where
 you want.
 
