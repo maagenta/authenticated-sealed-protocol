@@ -4,7 +4,7 @@ Work this library has decided on and deliberately not done yet, with the
 reason for the delay. Anything here has a design; what it lacks is the
 right moment.
 
-## Graceful shutdown of `proto_serve` — after bidirectionality, v1.2
+## Graceful shutdown of `proto_serve`, parent side — v1.2
 
 **What is missing.** `proto_serve` blocks in `accept()` and returns only
 when it cannot serve. An application has no way to say "stop": no way to
@@ -12,8 +12,8 @@ release the port, let the clients in progress finish, close its storage and
 exit with status 0. The only way to stop a server today is to kill the
 process, which cuts whoever was mid-command.
 
-The design below is settled. It is in two halves, and only the second one
-depends on bidirectionality.
+The design is settled and in two halves. This one does not depend on
+bidirectionality; the child side does, and waits for v2.0 (below).
 
 **Parent side.** `proto_serve_stop()` writes one byte into a pipe the
 library creates at startup — a `write()` is one of the few things a signal
@@ -43,7 +43,22 @@ int rc = proto_serve(port, allowed, handler, &ctx, &opts);
 if (rc == PROTO_OK) { /* asked to stop: close storage, exit 0 */ }
 ```
 
-**Child side.** Telling the children to wrap up, so that a stop lands
+**What the gap costs until then.** A killed server leaves its children
+orphaned; one killed mid-command loses that command and leaves its client
+without a reply. SQLite rolls the transaction back, so storage is not
+corrupted, but the entry is gone and the client cannot tell "not saved"
+from "saved, answer lost". The window is small — a command takes
+milliseconds against sessions that idle for hours — which is why this is
+worth doing well later rather than badly now.
+
+**Workaround meanwhile.** An application that needs a child to stop can do
+it without the library: call `shutdown()` on the connection from its own
+signal handler, which makes the blocked read fail. `docs.md` documents it
+under cancelling a blocked call.
+
+## Graceful shutdown of `proto_serve`, child side — with bidirectionality, v2.0
+
+**What is missing.** Telling the children to wrap up, so that a stop lands
 *between* messages and never inside one. The readers already guarantee half
 of that — `proto_recv_line*` returns a line only once it has seen the
 newline, and `write_all` resumes short writes — so no message is ever cut
@@ -61,27 +76,18 @@ one more source to wait on, and the signal-and-flag machinery sketched
 above becomes the wrong answer to a question that no longer exists.
 Building it now would mean discarding it then.
 
-**What the gap costs until then.** A killed server leaves its children
-orphaned; one killed mid-command loses that command and leaves its client
-without a reply. SQLite rolls the transaction back, so storage is not
-corrupted, but the entry is gone and the client cannot tell "not saved"
-from "saved, answer lost". The window is small — a command takes
-milliseconds against sessions that idle for hours — which is why this is
-worth doing well later rather than badly now.
-
-**Workaround meanwhile.** An application that needs a child to stop can do
-it without the library: call `shutdown()` on the connection from its own
-signal handler, which makes the blocked read fail. `docs.md` documents it
-under cancelling a blocked call.
+**Until then.** With v1.2, a stop frees the port and waits up to
+`drain_ms` for the children, but it cannot ask a child to finish: one
+that is still serving when `drain_ms` runs out is left running, as today.
 
 ## Other pending work
 
 - **Tests.** The structure and `test.h` are agreed; nothing is written.
   Every fix in v1.1 was verified by a one-off program, which is evidence
   but not a suite.
-- **CI.** No `.github/workflows/ci.yml`. The build has only ever been
+- **CI — v1.2.** No `.github/workflows/ci.yml`. The build has only ever been
   exercised on macOS with clang; the Linux paths (`TCP_KEEPIDLE`, the
   busy-loop `accept` case, the kernel's own connect timeout) are reasoned
   about, not measured.
-- **`crypto.c` has never been read line by line.** Its absence from the
-  fixed list means nobody looked, not that it is clean.
+- **`crypto.c` has never been read line by line — v1.2.** Its absence from
+  the fixed list means nobody looked, not that it is clean.

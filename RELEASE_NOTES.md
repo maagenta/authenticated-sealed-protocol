@@ -1,6 +1,6 @@
 # Release notes
 
-## v1.1 — Error codes, keepalive and fixes [Unreleased]
+## v1.1 — Error codes, keepalive and fixes [2026-10-13]
 
 Four things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, a server can choose which interface to listen on, and eighteen defects carried over from v1.0 are fixed.
 
