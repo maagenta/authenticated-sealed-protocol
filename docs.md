@@ -121,6 +121,21 @@ All three key files have the same format: **a single line of base64**
 read. Each must be a regular file: a directory, a FIFO or a device is
 refused with `PROTO_E_KEY_NOT_FILE` before anything is read from it.
 
+The format is strict: the line holds the key and nothing else. What is
+wrong with a line that does not is reported, never repaired, so that a key
+has one spelling — and because most of it cannot be seen in an editor,
+each kind has a code of its own:
+
+- a blank first line, or an empty file: `PROTO_E_KEY_EMPTY`;
+- something around the key — a space or a tab, a byte order mark an editor
+  added, a non-breaking space pasted from a web page, quotes:
+  `PROTO_E_KEY_STRAY`;
+- characters inside the line that are not standard base64, the URL-safe
+  variant, or missing `=` padding: `PROTO_E_KEY_FORMAT`;
+- valid base64 of the wrong size: `PROTO_E_KEY_SIZE`, usually the wrong
+  file. `enc.key` and `auth.pub` are both 32 bytes, so the size cannot tell
+  those two apart.
+
 | File | Contains | Decoded size | Kept by |
 |---|---|---|---|
 | `auth.key` | Ed25519 secret key (libsodium format: 32-byte seed ‖ 32-byte public key) | 64 bytes | client (secret!) |
@@ -351,13 +366,15 @@ the sign rule and the successes.
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
 | `PROTO_E_KEY_OPEN` | `-301` | `open()` failed for a reason other than those below — out of descriptors or memory | `proto_load_keys`, `proto_load_pubkey_hex` |
-| `PROTO_E_KEY_EMPTY` | `-302` | file is empty | idem |
-| `PROTO_E_KEY_FORMAT` | `-303` | not base64 of the expected size | idem |
+| `PROTO_E_KEY_EMPTY` | `-302` | the first line is blank: an empty file, or nothing but spaces and tabs before the newline | idem |
+| `PROTO_E_KEY_FORMAT` | `-303` | the line is not base64: a character outside the standard alphabet inside it, the URL-safe variant, or missing `=` padding | idem |
 | `PROTO_E_KEY_MISMATCH` | `-304` | `auth.key` is damaged: the public key it carries does not match the one its seed derives | `proto_load_keys` |
 | `PROTO_E_KEY_NOT_FOUND` | `-305` | the path leads to no file: nothing there, a component that is not a directory, a symlink loop or a name too long. Check the path and the working directory | `proto_load_keys`, `proto_load_pubkey_hex` |
 | `PROTO_E_KEY_DENIED` | `-306` | no permission to read the file: check its owner and mode, and the user the program runs as | idem |
 | `PROTO_E_KEY_NOT_FILE` | `-307` | the path is not a regular file — a directory, a FIFO, a device. Refused before a byte is read, so a FIFO cannot hang the load | idem |
 | `PROTO_E_KEY_READ` | `-308` | `read()` failed after the file was opened: a disk or filesystem error | idem |
+| `PROTO_E_KEY_STRAY` | `-309` | something around the key on its line: a space or a tab, a byte order mark an editor added, a non-breaking space pasted from a web page, quotes. Usually invisible in an editor | idem |
+| `PROTO_E_KEY_SIZE` | `-310` | valid base64 of the wrong size — usually the wrong file, such as `auth.pub` where `auth.key` belongs. Given to `proto_load_pubkey_hex`, it usually means `auth.key`, the client's secret, has been copied to the server | idem |
 
 **Cryptography**
 
@@ -828,7 +845,8 @@ derive both public keys into `out`.
 [key file codes](#error-codes), each pointing at a different thing to check:
 the path (`PROTO_E_KEY_NOT_FOUND`, `PROTO_E_KEY_NOT_FILE`), the permissions
 (`PROTO_E_KEY_DENIED`), the system (`PROTO_E_KEY_OPEN`, `PROTO_E_KEY_READ`)
-or the contents (`PROTO_E_KEY_EMPTY`, `PROTO_E_KEY_FORMAT`). The code says
+or the contents (`PROTO_E_KEY_EMPTY`, `PROTO_E_KEY_STRAY`,
+`PROTO_E_KEY_FORMAT`, `PROTO_E_KEY_SIZE`). The code says
 what went wrong but not which of the two files: call it once per file if you
 need that distinction. The exception is `PROTO_E_KEY_MISMATCH`, which only
 `auth.key` can cause: its public half does not match its seed, so the file
@@ -858,6 +876,8 @@ into `hex_out`. This is how a server builds its allowlist string.
 **Returns** `PROTO_OK`, one of the `PROTO_E_KEY_*` codes (as for
 [`proto_load_keys`](#proto_load_keys)), `PROTO_E_PARAM` for a `NULL` path,
 or `PROTO_E_BUFFER_TOO_SMALL` if `hex_sz` is below `AUTH_PK_LEN * 2 + 1`.
+Handed `auth.key` by mistake, it fails with `PROTO_E_KEY_SIZE`: that file is
+the client's secret and must not stay on the server.
 
 ```c
 char allowed[AUTH_PK_LEN * 2 + 1];
