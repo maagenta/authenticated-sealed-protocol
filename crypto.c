@@ -1,26 +1,59 @@
 #include "crypto.h"
-#include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
-/* Read the first line of a file and decode it from base64. The caller is
- * told which of the three things went wrong; it decides whether and where to
- * report it, so nothing is printed here. */
+/* Read the first line of a file and decode it from base64. Each way of
+ * failing has its own code, because each sends the user somewhere else: the
+ * path, the permissions, what the path points at, the disk. The caller
+ * decides whether and where to report it, so nothing is printed here. */
 static int read_b64_key(const char *path,
                         unsigned char *out, size_t expected_len) {
-    FILE *f = fopen(path, "r");
-    if (!f) return PROTO_E_KEY_OPEN;
+    if (!path) return PROTO_E_PARAM;
 
-    char line[512];
-    if (!fgets(line, sizeof(line), f)) {
-        fclose(f);
-        return PROTO_E_KEY_EMPTY;
+    /* O_NONBLOCK so that a FIFO with no writer cannot hang the open: fstat
+     * below refuses it, with anything else that is not a regular file — a
+     * directory, a device, a terminal — before a byte is read. On a regular
+     * file the flag changes nothing. */
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        switch (errno) {
+        case ENOENT: case ENOTDIR: case ELOOP: case ENAMETOOLONG:
+            return PROTO_E_KEY_NOT_FOUND;   /* the path leads to no file */
+        case EACCES: case EPERM:
+            return PROTO_E_KEY_DENIED;
+        default:
+            return PROTO_E_KEY_OPEN;        /* out of descriptors or memory */
+        }
     }
-    fclose(f);
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return PROTO_E_KEY_READ; }
+    if (!S_ISREG(st.st_mode)) { close(fd); return PROTO_E_KEY_NOT_FILE; }
 
-    size_t l = strlen(line);
-    while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
-        line[--l] = '\0';
+    /* A key line is under 100 characters. Read until the first newline, the
+     * end of the file or a full buffer, whichever comes first. */
+    char line[512];
+    size_t l = 0;
+    while (l < sizeof line - 1) {
+        ssize_t n = read(fd, line + l, sizeof line - 1 - l);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { close(fd); return PROTO_E_KEY_READ; }
+        if (n == 0) break;
+        l += (size_t)n;
+        if (memchr(line + l - (size_t)n, '\n', (size_t)n)) break;
+    }
+    close(fd);
+    if (l == 0) return PROTO_E_KEY_EMPTY;
+
+    /* The first line only, without its line ending. */
+    line[l] = '\0';
+    l = strcspn(line, "\n");
+    while (l > 0 && line[l-1] == '\r')
+        l--;
+    line[l] = '\0';
 
     size_t bin_len = 0;
     if (sodium_base642bin(out, expected_len, line, l,

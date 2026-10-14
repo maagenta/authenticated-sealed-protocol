@@ -4,7 +4,7 @@
 
 A server can now be stopped without killing it: `proto_serve_stop()`, called from the application's signal handler, makes `proto_serve` stop accepting, free the port, give the connections in progress a bounded time to finish, and return `PROTO_OK`.
 
-**No breaking changes.** `proto_serve_opts_t` gains a field at the end, so designated initializers and `NULL` keep meaning what they meant, and a server that never calls `proto_serve_stop()` behaves as before — except that the library now holds two descriptors for the life of the process: the channel described below.
+**No breaking changes, but one code moves.** `proto_serve_opts_t` gains a field at the end, so designated initializers and `NULL` keep meaning what they meant, and a server that never calls `proto_serve_stop()` behaves as before — except that the library now holds two descriptors for the life of the process: the channel described below. A key file that does not exist is now `PROTO_E_KEY_NOT_FOUND` (-305) instead of `PROTO_E_KEY_OPEN` (-301), and other causes that code used to cover have codes of their own (see Fixes). Code that tests `rc < 0` sees no difference; code that compares against `PROTO_E_KEY_OPEN` should look at the new codes too.
 
 ### Graceful stop
 
@@ -18,7 +18,11 @@ Until now `proto_serve` returned only when it could not serve, and the only way 
 
 Measured on macOS, with `HANDSHAKE_TIMEOUT_MS=2000`: a stop from a signal handler and from another thread returned `PROTO_OK` in 0.30 s, with the port refused afterwards; a stop asked before the first call returned at once, and the next call ran normally; `drain_ms` 5000 returned at 2.10 s, when the last child ended, and `drain_ms` 500 at 0.81 s with the busy child still running; `kill` on one child ended it while the server kept accepting; `SIGTERM` to the server, or to its whole process group, exited 0.
 
-Documentation: `docs.md` gains a `proto_serve_stop` entry and a "One per process" note, `drain_ms` in the options table, `PROTO_OK` in what `proto_serve` returns, and a worked server that stops on `SIGTERM`; `architecture.md` explains the four choices behind the stop; `TODO.md` keeps the child half, for v2.0.
+### Fixes
+
+- **Every way of failing to read a key file now says which it was, and none can hang the load.** `proto_load_keys` and `proto_load_pubkey_hex` reported seven different failures to open a file — nothing at the path, a path component that is not a directory, no permission, a symlink loop, a name too long, no descriptors left, a `NULL` path — all as `PROTO_E_KEY_OPEN`, so the message could not say whether to check the path, the permissions or the system. A directory came back as `PROTO_E_KEY_EMPTY` ("key file is empty"), a device such as `/dev/zero` as `PROTO_E_KEY_FORMAT`, and a FIFO with no writer hung the program forever inside `fopen`. The reader now opens with `open()`, refuses anything that is not a regular file before reading a byte — `O_NONBLOCK` keeps a FIFO from hanging the open — and reads with `read()`, so each step has its own `errno`. Four codes are new: `PROTO_E_KEY_NOT_FOUND` (-305) for a path that leads to no file, `PROTO_E_KEY_DENIED` (-306) for a missing permission, `PROTO_E_KEY_NOT_FILE` (-307) for a directory, FIFO or device, and `PROTO_E_KEY_READ` (-308) for a read that fails once the file is open. `PROTO_E_KEY_OPEN` keeps what is left, the system's own shortages, and a `NULL` path is `PROTO_E_PARAM`. Measured case by case on macOS, each failure now gets its own code and the FIFO is refused at once; a failing `read()`, simulated, is `PROTO_E_KEY_READ`, and an interrupted one is retried. Reading without stdio also means the file's contents no longer pass through a buffer that `fclose` frees without wiping.
+
+Documentation: `docs.md` gains a `proto_serve_stop` entry and a "One per process" note, `drain_ms` in the options table, `PROTO_OK` in what `proto_serve` returns, and a worked server that stops on `SIGTERM`; its error tables gain the four key file codes, and its FAQ an entry for `PROTO_E_KEY_DENIED`. `architecture.md` explains the four choices behind the stop; `TODO.md` keeps the child half, for v2.0.
 
 ## v1.1 — Error codes, keepalive and fixes [2026-10-13]
 

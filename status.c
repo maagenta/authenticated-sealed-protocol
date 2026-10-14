@@ -21,6 +21,10 @@ const char *proto_strerror(int code) {
     case PROTO_E_KEY_EMPTY:         return "key file is empty";
     case PROTO_E_KEY_FORMAT:        return "key file is not base64 of the expected size";
     case PROTO_E_KEY_MISMATCH:      return "key file is damaged: its public key does not match its secret key";
+    case PROTO_E_KEY_NOT_FOUND:     return "no key file at that path";
+    case PROTO_E_KEY_DENIED:        return "no permission to read key file";
+    case PROTO_E_KEY_NOT_FILE:      return "key path is not a regular file";
+    case PROTO_E_KEY_READ:          return "could not read key file";
 
     case PROTO_E_CRYPTO:            return "cryptographic operation failed";
     case PROTO_E_BAD_SIGNATURE:     return "signature verification failed";

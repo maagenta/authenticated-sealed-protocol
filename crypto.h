@@ -20,17 +20,17 @@ int proto_init(void);
 
 /* Load both private keys (base64, one per file) and derive the public keys.
  * The copy of the public key that an Ed25519 secret key file carries is
- * checked against the one derived from its seed. Returns PROTO_OK, or
- * PROTO_E_KEY_OPEN / PROTO_E_KEY_EMPTY / PROTO_E_KEY_FORMAT — which of the
- * two files failed is not reported — or PROTO_E_KEY_MISMATCH, which only
- * the auth key file can cause: the file is damaged. */
+ * checked against the one derived from its seed. Returns PROTO_OK,
+ * PROTO_E_PARAM for a NULL path, or a PROTO_E_KEY_* code saying what went
+ * wrong — but not with which of the two files. PROTO_E_KEY_MISMATCH, which
+ * only the auth key file can cause, means the file is damaged. */
 int proto_load_keys(const char *auth_sk_path,
                     const char *enc_sk_path,
                     proto_keys_t *out);
 
 /* Read an Ed25519 public key file (base64) and hex-encode it into hex_out,
  * which needs AUTH_PK_LEN * 2 + 1 bytes. Returns PROTO_OK, a PROTO_E_KEY_*
- * code, or PROTO_E_BUFFER_TOO_SMALL. */
+ * code, PROTO_E_PARAM for a NULL path, or PROTO_E_BUFFER_TOO_SMALL. */
 int proto_load_pubkey_hex(const char *path, char *hex_out, size_t hex_sz);
 
 /* Seal a message to enc_pk (anonymous sealed box), base64 into out_b64.

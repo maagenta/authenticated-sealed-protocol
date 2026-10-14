@@ -118,7 +118,8 @@ Complete reference for the `proto` library. For the design rationale see
 
 All three key files have the same format: **a single line of base64**
 (standard variant), optionally newline-terminated. Only the first line is
-read.
+read. Each must be a regular file: a directory, a FIFO or a device is
+refused with `PROTO_E_KEY_NOT_FILE` before anything is read from it.
 
 | File | Contains | Decoded size | Kept by |
 |---|---|---|---|
@@ -330,7 +331,7 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms` |
+| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms`, `proto_load_keys` and `proto_load_pubkey_hex` with a `NULL` path |
 | `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 lowercase hex chars — uppercase is refused too, since it would match no identity | `proto_serve` |
@@ -349,10 +350,14 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_KEY_OPEN` | `-301` | could not open the file | `proto_load_keys`, `proto_load_pubkey_hex` |
+| `PROTO_E_KEY_OPEN` | `-301` | `open()` failed for a reason other than those below — out of descriptors or memory | `proto_load_keys`, `proto_load_pubkey_hex` |
 | `PROTO_E_KEY_EMPTY` | `-302` | file is empty | idem |
 | `PROTO_E_KEY_FORMAT` | `-303` | not base64 of the expected size | idem |
 | `PROTO_E_KEY_MISMATCH` | `-304` | `auth.key` is damaged: the public key it carries does not match the one its seed derives | `proto_load_keys` |
+| `PROTO_E_KEY_NOT_FOUND` | `-305` | the path leads to no file: nothing there, a component that is not a directory, a symlink loop or a name too long. Check the path and the working directory | `proto_load_keys`, `proto_load_pubkey_hex` |
+| `PROTO_E_KEY_DENIED` | `-306` | no permission to read the file: check its owner and mode, and the user the program runs as | idem |
+| `PROTO_E_KEY_NOT_FILE` | `-307` | the path is not a regular file — a directory, a FIFO, a device. Refused before a byte is read, so a FIFO cannot hang the load | idem |
+| `PROTO_E_KEY_READ` | `-308` | `read()` failed after the file was opened: a disk or filesystem error | idem |
 
 **Cryptography**
 
@@ -819,13 +824,16 @@ derive both public keys into `out`.
 | `enc_sk_path` | path to `enc.key` (base64 X25519 secret, 32 B decoded) |
 | `out` | filled on success |
 
-**Returns** `PROTO_OK`, or `PROTO_E_KEY_OPEN`, `PROTO_E_KEY_EMPTY` or
-`PROTO_E_KEY_FORMAT`. The code says what went wrong but not which of the two
-files: call it once per file if you need that distinction. The exception is
-`PROTO_E_KEY_MISMATCH`, which only `auth.key` can cause: its public half
-does not match its seed, so the file is damaged. Nothing is
-printed — pass the code to [`proto_strerror`](#error-codes) and log it where
-you want.
+**Returns** `PROTO_OK`, `PROTO_E_PARAM` for a `NULL` path, or one of the
+[key file codes](#error-codes), each pointing at a different thing to check:
+the path (`PROTO_E_KEY_NOT_FOUND`, `PROTO_E_KEY_NOT_FILE`), the permissions
+(`PROTO_E_KEY_DENIED`), the system (`PROTO_E_KEY_OPEN`, `PROTO_E_KEY_READ`)
+or the contents (`PROTO_E_KEY_EMPTY`, `PROTO_E_KEY_FORMAT`). The code says
+what went wrong but not which of the two files: call it once per file if you
+need that distinction. The exception is `PROTO_E_KEY_MISMATCH`, which only
+`auth.key` can cause: its public half does not match its seed, so the file
+is damaged. Nothing is printed — pass the code to
+[`proto_strerror`](#error-codes) and log it where you want.
 
 ```c
 proto_conn_t c = { .fd = -1 };
@@ -847,8 +855,9 @@ into `hex_out`. This is how a server builds its allowlist string.
 | `hex_out` | buffer of at least `AUTH_PK_LEN * 2 + 1` bytes |
 | `hex_sz` | its size |
 
-**Returns** `PROTO_OK`, one of the `PROTO_E_KEY_*` codes, or
-`PROTO_E_BUFFER_TOO_SMALL` if `hex_sz` is below `AUTH_PK_LEN * 2 + 1`.
+**Returns** `PROTO_OK`, one of the `PROTO_E_KEY_*` codes (as for
+[`proto_load_keys`](#proto_load_keys)), `PROTO_E_PARAM` for a `NULL` path,
+or `PROTO_E_BUFFER_TOO_SMALL` if `hex_sz` is below `AUTH_PK_LEN * 2 + 1`.
 
 ```c
 char allowed[AUTH_PK_LEN * 2 + 1];
@@ -1820,11 +1829,19 @@ This is about reads. To stop the server itself — `proto_serve`, waiting for
 clients — call [`proto_serve_stop`](#proto_serve_stop) from the handler
 instead; it needs no `shutdown()`.
 
-**`proto_load_keys` returns `PROTO_E_KEY_OPEN`.**
+**`proto_load_keys` returns `PROTO_E_KEY_NOT_FOUND`.**
 Key paths are resolved relative to the process working directory. Pass
 absolute paths or run from the directory containing the keys. The library
 does not print anything — feed the code to
-[`proto_strerror`](#error-codes) and log it yourself.
+[`proto_strerror`](#error-codes) and log it yourself. (Before v1.2 this was
+reported as `PROTO_E_KEY_OPEN`, along with every other reason a file could
+not be opened.)
+
+**`proto_load_keys` returns `PROTO_E_KEY_DENIED`.**
+The file is there but this process may not read it. The usual cause is a
+service running as a different user from the one who created the keys —
+the keys are created `0600`, readable by their owner only. Give the files to
+the user the service runs as rather than opening up their mode.
 
 **Can two clients share one identity?**
 Yes — copy both key files. They'll authenticate as the same user and decrypt
