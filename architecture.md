@@ -22,6 +22,7 @@ that varies (command verbs, storage, registration policy).
 ```
             ┌──────────────────────────────┐
   server    │  serve    proto_serve()      │   accept/fork harness (server only)
+            │           proto_serve_stop() │
             └───────────────┬──────────────┘
                             │ calls proto_auth_server()
             ┌───────────────▼──────────────┐
@@ -249,17 +250,20 @@ moot.
 
 ### `serve.h` / `serve.c` — server harness
 
-The only server-only file, and the only one that knows about `fork`. One
-function and two types:
+The only server-only file, and the only one that knows about `fork`. Two
+functions and two types:
 
 - **`proto_handler_fn`** — the contract for an application's per-connection
   handler (authenticated fd + identity + opaque ctx, running in a child
   process).
 - **`proto_serve_opts_t`** — deployment options, passed by pointer; `NULL`
-  means all defaults. Today one field, `bind_addr`.
+  means all defaults. Two fields: `bind_addr` and `drain_ms`.
 - **`proto_serve`** — bind/listen, `SIGPIPE`/`SIGCHLD` handling, then
-  accept → fork → `proto_auth_server` → handler, until the listening
-  socket itself fails.
+  accept → fork → `proto_auth_server` → handler, until it is stopped or
+  the listening socket itself fails.
+- **`proto_serve_stop`** — asks the running `proto_serve` to stop: no new
+  clients, the port closed, the connections in progress given `drain_ms`,
+  and `PROTO_OK` returned.
 
 The loop distinguishes three kinds of `accept` failure because they call
 for three different reactions: a signal or an aborted peer is retried at
@@ -277,7 +281,8 @@ The options are a struct rather than extra parameters for the usual reason:
 a field can be added without changing the signature, and a designated
 initializer that names one field leaves the rest zero, which the library
 reads as "default". Only deployment decisions belong in it — things decided
-when a server is started, like which interface it listens on. Build-time
+when a server is started, like which interface it listens on, or how long a
+stop waits for the connections in progress. Build-time
 policy such as the timeouts stays out: a project sets those once, with `-D`
 in its Makefile, and does not want to repeat them at every call.
 
@@ -304,6 +309,40 @@ Every read in `proto_auth_server` gives up after `HANDSHAKE_TIMEOUT_MS`, the
 child returns from the handshake with `NULL`, exits, and the reaper collects
 it. A stranger that connects and says nothing costs the server one child for
 ten seconds, not one child for good.
+
+**Stopping.** The loop belongs to the library, so only the library can end
+it: an application's signal handler that sets a flag changes nothing, since
+the wait it interrupts is resumed and control never comes back to look at
+the flag. Hence `proto_serve_stop`, and four choices behind it.
+
+- **The application keeps its signals.** The harness sets `SIGPIPE` and
+  `SIGCHLD` because it needs them for its own children; which signal means
+  "stop" is the application's decision, so the library installs no handler
+  and offers a function to call from one.
+- **A flag, and a channel to wake the loop.** The flag is the request; the
+  channel only gets the loop out of its wait. A flag alone is the wrong
+  mechanism: a stop that lands between checking it and blocking again would
+  sit unseen until the next client. So the loop waits with `poll` on the
+  listener and on a socket pair, and `proto_serve_stop` writes one byte
+  into the pair. The flag also outlives a `proto_serve` that has not
+  started yet, so a stop that arrives while the application is still
+  setting up is not lost; it is honoured once the server is set up, so a
+  port that cannot be opened is still reported.
+- **The channel is never closed.** It is created by the first
+  `proto_serve` and kept for the life of the process, which is what makes
+  the call safe from any thread: closing it would free its numbers, and a
+  stop on another thread, caught between reading the number and writing to
+  it, could write a byte into whatever file had just been given that
+  number.
+- **The children are not told.** The parent stops accepting and closes the
+  port — the children closed their copy of the listener when they were
+  forked, so it is free at once — and gives them `drain_ms`, asking the
+  kernel with `waitpid` whether any is left rather than counting them. A
+  child that receives the signal itself ends at once, as it would have
+  without the application's handler. Asking a child to finish between two
+  messages needs the child to wait on its client and on the stop at the
+  same time, which is the shape bidirectionality gives it; that half is
+  designed in `TODO.md` and waits for v2.0.
 
 It contains no application logic and no storage; it exists purely so that
 every server's `main` collapses to "load allowlist, call `proto_serve`".
@@ -585,6 +624,7 @@ project demands it.
 |---|---|---|
 | Key file generation | ✔ (`keygen/` tool) | run it once per identity |
 | TCP connect / accept / fork / reaping | ✔ (`proto_connect`, `proto_serve`) | — |
+| Stopping the server cleanly | ✔ (`proto_serve_stop`, `drain_ms`) | choose the signals; call it from your handler |
 | Challenge–response authentication | ✔ | — |
 | First-connect registration (client side) | ✔ (inside `proto_connect`) | — |
 | First-connect registration (server side) | — | persist the enc pubkey your way |

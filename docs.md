@@ -40,6 +40,7 @@ Complete reference for the `proto` library. For the design rationale see
   - [`proto_auth_server`](#proto_auth_server)
 - [Module `serve` — server harness](#module-serve--server-harness)
   - [`proto_serve`](#proto_serve)
+  - [`proto_serve_stop`](#proto_serve_stop)
 - [Tool `keygen` — generating key files](#tool-keygen--generating-key-files)
 - [Wire protocol appendix](#wire-protocol-appendix)
 - [Recipes](#recipes)
@@ -80,7 +81,9 @@ Complete reference for the `proto` library. For the design rationale see
   does not turn into a spurious failure. The consequence is that a signal
   handler alone cannot break a caller out of a blocked read; the FAQ entry
   "My program ignores Ctrl-C while waiting for a line" shows how to cancel
-  one.
+  one. `proto_serve`'s own wait is the exception:
+  [`proto_serve_stop`](#proto_serve_stop), called from your handler, ends
+  it.
 - The library's own writes never raise `SIGPIPE`: they use `send()` with
   `MSG_NOSIGNAL`, so a vanished peer surfaces as `PROTO_E_WRITE` and the
   process keeps running. This covers the library's calls only — a `write()`
@@ -327,7 +330,7 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0` |
+| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms` |
 | `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 lowercase hex chars — uppercase is refused too, since it would match no identity | `proto_serve` |
@@ -362,7 +365,7 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_SOCKET` | `-501` | `socket()` failed — in `proto_connect`, for every address the host resolved to | `proto_connect`, `proto_serve` |
+| `PROTO_E_SOCKET` | `-501` | `socket()` failed — in `proto_connect`, for every address the host resolved to; in `proto_serve`, also the `socketpair()` that [`proto_serve_stop`](#proto_serve_stop) wakes it through | `proto_connect`, `proto_serve` |
 | `PROTO_E_RESOLVE` | `-502` | `getaddrinfo()` failed | `proto_connect` |
 | `PROTO_E_CONNECT` | `-503` | `connect()` failed for every address the host resolved to | `proto_connect` |
 | `PROTO_E_BIND` | `-504` | `bind()` failed for another reason | `proto_serve` |
@@ -472,23 +475,29 @@ handler changes in memory is lost — persist through your storage.
 closed peer fails with `EPIPE` instead of killing the child. `SIGCHLD` is at
 its default: the parent's reaper is not inherited, so a handler that runs
 other programs — `popen`/`pclose`, `system`, its own `fork` and `waitpid` —
-gets their exit status as in any C program.
+gets their exit status as in any C program. The signal handlers you
+installed before `proto_serve` are inherited as they are; one that calls
+[`proto_serve_stop`](#proto_serve_stop) ends the child at once, as the
+signal would have without it.
 
 ### `proto_serve_opts_t`
 
 ```c
 typedef struct {
     const char *bind_addr;   /* IPv4 literal to listen on; NULL = all interfaces */
+    int drain_ms;            /* after a stop, wait for connections; 0 = no wait */
 } proto_serve_opts_t;
 ```
 
 Deployment options for [`proto_serve`](#proto_serve). Every field has a
-default, and **zero means default**: `NULL` for a pointer. Passing `NULL`
-instead of a struct means every default — that is what most callers do.
+default, and **zero means default**: `NULL` for a pointer, `0` for a
+number. Passing `NULL` instead of a struct means every default — that is
+what most callers do.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `bind_addr` | `NULL` (every interface) | IPv4 address to listen on, as a dotted literal such as `"127.0.0.1"` or `"10.0.0.5"`. No name resolution; anything `inet_pton` rejects fails `proto_serve` with `PROTO_E_BAD_ADDRESS` before the port is touched. |
+| `drain_ms` | `0` (no wait) | Once [`proto_serve_stop`](#proto_serve_stop) is called, how long `proto_serve` waits for the connections in progress before it returns, in milliseconds; it returns sooner if the last one ends first. A connection still open when the time runs out is left running. Keep it below your supervisor's grace period — Docker allows 10 s, systemd 90 s by default — or the wait ends in `SIGKILL`. A negative value fails `proto_serve` with `PROTO_E_PARAM` before the port is touched. |
 
 **Always use a designated initializer.** It zeroes every field you do not
 name, which is what makes "zero means default" safe, and it keeps compiling
@@ -1114,7 +1123,10 @@ The turnkey server. In one call:
 4. loops: `accept` → `fork` → in the child, restore `SIGCHLD`'s default
    (see [signals in the child](#proto_handler_fn)), authenticate with
    [`proto_auth_server`](#proto_auth_server) → on success call
-   `handler(fd, identity_hex, ctx)` → close and `_exit`.
+   `handler(fd, identity_hex, ctx)` → close and `_exit`,
+5. until [`proto_serve_stop`](#proto_serve_stop): then it accepts no one
+   else, closes the port, gives the connections in progress up to
+   `opts->drain_ms` to finish, and returns `PROTO_OK`.
 
 **Under pressure.** Running out of descriptors or processes does not stop
 the server. An `accept` that fails for lack of a descriptor or memory is
@@ -1128,21 +1140,25 @@ reply.
 
 | Param | Description |
 |---|---|
-| `port` | TCP port to listen on, 1–65535. `0` is refused too: the kernel would pick a free port, but `proto_serve` never returns to tell you which, so the server would run where no client can find it |
+| `port` | TCP port to listen on, 1–65535. `0` is refused too: the kernel would pick a free port, but `proto_serve` has no way to tell you which, so the server would run where no client can find it |
 | `allowed_hex` | authorized identity, 64 lowercase hex chars (see `proto_load_pubkey_hex`); anything else fails with `PROTO_E_BAD_ALLOWLIST` |
 | `handler` | your per-connection function ([contract](#proto_handler_fn)) |
 | `ctx` | passed through to the handler untouched (DB path, config, …) |
 | `opts` | deployment options ([`proto_serve_opts_t`](#proto_serve_opts_t)); `NULL` for all defaults |
 
-**Returns** only when it cannot serve. At startup: `PROTO_E_NO_ALLOWLIST`,
-`PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`, `PROTO_E_BAD_PORT`,
-`PROTO_E_BAD_ADDRESS`, `PROTO_E_SODIUM`, `PROTO_E_SOCKET`,
-`PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or
-`PROTO_E_LISTEN`. Later: `PROTO_E_ACCEPT`, when `accept` fails in a way no
-retry can fix — the listening socket itself has become unusable — so the
-application can log it and decide, rather than the loop spinning forever
-in silence. The allowlist, handler, port and bind address are checked
-first, before the port is bound, so a misconfigured server fails at startup
+**Returns** `PROTO_OK` after [`proto_serve_stop`](#proto_serve_stop): the
+port is closed and the connections in progress have had `opts->drain_ms`
+to finish, so the code after the call runs — close your storage, log,
+exit 0. Otherwise only when it cannot serve. At startup:
+`PROTO_E_NO_ALLOWLIST`, `PROTO_E_BAD_ALLOWLIST`, `PROTO_E_NO_HANDLER`,
+`PROTO_E_BAD_PORT`, `PROTO_E_BAD_ADDRESS`, `PROTO_E_PARAM` (a negative
+`drain_ms`), `PROTO_E_SODIUM`, `PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`,
+`PROTO_E_PERM_DENIED`, `PROTO_E_BIND` or `PROTO_E_LISTEN`. Later:
+`PROTO_E_ACCEPT`, when `accept` fails in a way no retry can fix — the
+listening socket itself has become unusable — so the application can log
+it and decide, rather than the loop spinning forever in silence. The
+allowlist, handler, port, bind address and drain time are checked first,
+before the port is bound, so a misconfigured server fails at startup
 instead of rejecting every connection — or, worse, running on a port nobody
 expects.
 
@@ -1173,6 +1189,78 @@ Behind a reverse proxy or an SSH tunnel, listen on loopback only:
 proto_serve_opts_t opts = { .bind_addr = "127.0.0.1" };
 return proto_serve(5000, allowed, on_client, "/var/lib/app/data.db", &opts);
 ```
+
+### `proto_serve_stop`
+
+```c
+void proto_serve_stop(void);
+```
+
+Asks the running [`proto_serve`](#proto_serve) to stop. It accepts no one
+else, closes the port — free at once for the next instance — gives the
+connections in progress up to [`opts->drain_ms`](#proto_serve_opts_t) to
+finish, and returns `PROTO_OK`, so the code after the call runs.
+
+The library takes no signal for itself; route the ones you want here from
+a handler of your own:
+
+```c
+static void on_term(int sig) { (void)sig; proto_serve_stop(); }
+
+int main(void) {
+    /* ... load the allowlist, open storage ... */
+    signal(SIGTERM, on_term);            /* kill, systemctl stop, docker stop */
+    signal(SIGINT,  on_term);            /* Ctrl-C */
+
+    proto_serve_opts_t opts = { .drain_ms = 5000 };
+    int rc = proto_serve(5000, allowed, on_client, &db, &opts);
+    if (rc < 0) { my_log(LOG_ERR, "server: %s", proto_strerror(rc)); return 1; }
+    close_storage(&db);                  /* asked to stop: finish cleanly */
+    return 0;
+}
+```
+
+**Why it is needed.** A handler of your own cannot do this alone.
+`proto_serve` waits inside the library, which resumes the wait when a
+signal interrupts it, so control never comes back to your code to look at
+a flag: the signal is swallowed, and the process neither dies nor stops.
+
+**Where it is safe.** In a signal handler, and on any thread. It sets a
+flag, writes one byte to a channel that wakes `proto_serve`, and leaves
+`errno` as it found it. That channel is a socket pair the first
+`proto_serve` creates and the parent never closes — a stop on another
+thread can then never write to a number that has since been reused for
+another file — so from then on the process holds two descriptors of the
+library's. Leave them open: code that closes every descriptor it did not
+open itself must spare these two. There is one stop per process, not one
+per server ([one per process](#proto_serve)).
+
+**When it takes effect.**
+
+- While `proto_serve` is serving: at once. A client still waiting to be
+  accepted is not: closing the port resets its connection.
+- Before `proto_serve` has started — the signal arrives while you are still
+  loading keys — the stop is kept. `proto_serve` sets up, sees it, closes
+  the port and returns `PROTO_OK`. Setting up first is deliberate: a port
+  that cannot be opened is still reported, so a broken deployment shows up
+  now rather than at the next start.
+- While `proto_serve` is draining: it is part of the stop in progress.
+  After `proto_serve` has returned: it is kept for the next call.
+
+**What happens to the connections.** They are not told to finish.
+
+- The parent waits up to `drain_ms` (default `0`, no wait) and returns as
+  soon as the last child has ended. A connection still open when the time
+  runs out is left running and ends when its client leaves.
+- The wait counts every child of the process, including any you forked
+  yourself: the kernel does not tell them apart.
+- A child that receives the signal itself — `kill` on its pid, Ctrl-C
+  reaching the whole process group, systemd's default `KillMode` — runs
+  the handler it inherited, and there `proto_serve_stop` ends the child at
+  once, as the signal would have without your handler. Children behave as
+  they did before v1.2.
+- Ending a child gracefully — between two messages, with a `BYE` to its
+  client — comes with bidirectionality, in v2.0 (see `TODO.md`).
 
 ---
 
@@ -1537,6 +1625,7 @@ can never decrypt.
 #include "protocol/serve.h"
 #include "protocol/crypto.h"
 #include "protocol/wire.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1603,6 +1692,10 @@ static void on_client(int fd, const char *user, void *ctx) {
     }
 }
 
+/* stop on SIGTERM or Ctrl-C, letting commands in progress finish ----- */
+
+static void on_term(int sig) { (void)sig; proto_serve_stop(); }
+
 int main(void) {
     if (proto_init() != 0) return 1;
 
@@ -1610,8 +1703,18 @@ int main(void) {
     if (proto_load_pubkey_hex("auth.pub", allowed, sizeof allowed) != 0)
         return 1;
 
+    signal(SIGTERM, on_term);
+    signal(SIGINT,  on_term);
+
     printf("vault-server listening on %d\n", VAULT_PORT);
-    return proto_serve(VAULT_PORT, allowed, on_client, "vault.db", NULL);
+    proto_serve_opts_t opts = { .drain_ms = 5000 };
+    int rc = proto_serve(VAULT_PORT, allowed, on_client, "vault.db", &opts);
+    if (rc < 0) {
+        fprintf(stderr, "vault-server: %s\n", proto_strerror(rc));
+        return 1;
+    }
+    printf("vault-server stopped\n");
+    return 0;
 }
 ```
 
@@ -1711,7 +1814,11 @@ The read then returns `PROTO_E_PEER_CLOSED` (or `NULL` from
 `proto_recv_line_dyn`) — the descriptor really is unusable at that point,
 so the code is honest. A client that would rather poll its own state while
 idle can instead wait with a bound and check the flag between waits; that is
-what `proto_wait` is for in the next release.
+what `proto_wait` is for, with bidirectionality, in v2.0.
+
+This is about reads. To stop the server itself — `proto_serve`, waiting for
+clients — call [`proto_serve_stop`](#proto_serve_stop) from the handler
+instead; it needs no `shutdown()`.
 
 **`proto_load_keys` returns `PROTO_E_KEY_OPEN`.**
 Key paths are resolved relative to the process working directory. Pass

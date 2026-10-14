@@ -1,5 +1,25 @@
 # Release notes
 
+## v1.2 — Graceful server stop [unreleased]
+
+A server can now be stopped without killing it: `proto_serve_stop()`, called from the application's signal handler, makes `proto_serve` stop accepting, free the port, give the connections in progress a bounded time to finish, and return `PROTO_OK`.
+
+**No breaking changes.** `proto_serve_opts_t` gains a field at the end, so designated initializers and `NULL` keep meaning what they meant, and a server that never calls `proto_serve_stop()` behaves as before — except that the library now holds two descriptors for the life of the process: the channel described below.
+
+### Graceful stop
+
+Until now `proto_serve` returned only when it could not serve, and the only way to stop a server was to kill it. Measured on a minimal server: `SIGTERM` with no handler killed the process with status 143, and the code after `proto_serve` — closing storage, a last log line, `exit(0)` — never ran. With a handler that set a flag, the process stayed alive and kept accepting connections: the library resumed its wait, and control never came back to look at the flag. A server that handled `SIGTERM` could not be stopped by it at all.
+
+- **`proto_serve_stop()`** asks the running `proto_serve` to stop. It accepts no one else, closes the listening socket — the port is free at once, since the children closed their copy when they were forked — waits for the connections in progress, and returns `PROTO_OK`. The library takes no signal for itself: the application routes the ones it wants (`SIGTERM`, `SIGINT`) to the function from its own handler.
+- **`drain_ms`**, a new field in `proto_serve_opts_t`, bounds that wait. `0`, the default, does not wait; a positive value waits up to that many milliseconds and returns as soon as the last child has ended; a negative value fails with `PROTO_E_PARAM` at startup, rather than being read as 0 or as "forever". A connection still open when the time runs out is left running.
+- **Safe in a signal handler and on any thread.** The function sets a flag and writes one byte to a socket pair that wakes `proto_serve`, which now waits with `poll()` on the listener and on that pair instead of blocking in `accept()`. The flag is the request, so a stop is never missed between a check and a wait; only the first stop writes, so the pair never fills; `errno` is left as it was found. The pair is created by the first `proto_serve` and never closed in the parent, so a stop called from another thread can never write to a descriptor number that has since been reused for another file. Failing to create it is `PROTO_E_SOCKET`.
+- **A stop asked before `proto_serve` starts is kept.** A signal that arrives while the application is still loading keys is no longer swallowed: `proto_serve` sets up, sees it, closes the port and returns `PROTO_OK`. Setting up first is deliberate, so that a port that cannot be opened is still reported.
+- **The children are not told — yet.** A child that receives the signal itself (`kill` on its pid, Ctrl-C to the process group, systemd's default `KillMode`) runs the handler it inherited, and there `proto_serve_stop()` ends it at once, as the signal would have without the handler: children behave as they did in v1.1. Ending a child between two messages, with a `BYE` to its client, needs the child to wait on its client and on the stop at the same time — the shape bidirectionality gives it — and is designed in `TODO.md` for v2.0.
+
+Measured on macOS, with `HANDSHAKE_TIMEOUT_MS=2000`: a stop from a signal handler and from another thread returned `PROTO_OK` in 0.30 s, with the port refused afterwards; a stop asked before the first call returned at once, and the next call ran normally; `drain_ms` 5000 returned at 2.10 s, when the last child ended, and `drain_ms` 500 at 0.81 s with the busy child still running; `kill` on one child ended it while the server kept accepting; `SIGTERM` to the server, or to its whole process group, exited 0.
+
+Documentation: `docs.md` gains a `proto_serve_stop` entry and a "One per process" note, `drain_ms` in the options table, `PROTO_OK` in what `proto_serve` returns, and a worked server that stops on `SIGTERM`; `architecture.md` explains the four choices behind the stop; `TODO.md` keeps the child half, for v2.0.
+
 ## v1.1 — Error codes, keepalive and fixes [2026-10-13]
 
 Four things: every `int`-returning function now returns a named reason instead of `-1`, connections can opt into TCP keepalive, a server can choose which interface to listen on, and eighteen defects carried over from v1.0 are fixed.

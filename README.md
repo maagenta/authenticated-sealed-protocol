@@ -20,7 +20,7 @@ application defines only its own command verbs (e.g. `POST`, `GET`) on top.
 - Ed25519 challenge–response authentication, single-authorized-key model
 - X25519 sealed-box encryption: write with the public key, read only with the secret key
 - Turnkey client session: `proto_connect()` = TCP connect + authenticate + first-run registration
-- Turnkey server harness: `proto_serve()` = bind/listen + fork-per-connection + per-client auth
+- Turnkey server harness: `proto_serve()` = bind/listen + fork-per-connection + per-client auth, stopped cleanly from your signal handler with `proto_serve_stop()`
 - Low-level primitives stay public, so custom accept loops / transports are possible
 - No size ceiling: dynamic line reads and length-based payload APIs
 - Optional TCP keepalive per connection (`proto_keepalive`), off unless you ask for it
@@ -133,7 +133,7 @@ int main(void) {
     if (proto_init() != 0) return 1;
     char allowed[AUTH_PK_LEN * 2 + 1];
     if (proto_load_pubkey_hex("auth.pub", allowed, sizeof allowed) != 0) return 1;
-    return proto_serve(5000, allowed, on_client, NULL, NULL);   /* returns only on failure */
+    return proto_serve(5000, allowed, on_client, NULL, NULL);   /* on failure, or 0 after proto_serve_stop() */
 }
 ```
 
@@ -146,7 +146,7 @@ int main(void) {
 | `wire.h` / `wire.c` | Line framing: send/receive `\n`-terminated lines, fixed or dynamic buffers; optional keepalive |
 | `crypto.h` / `crypto.c` | Keypairs (`proto_keys_t`), key loading, sealed-box encrypt/decrypt, challenge sign/verify |
 | `auth.h` / `auth.c` | Client session (`proto_conn_t`, `proto_connect`, `proto_close`) and the handshake primitives for both sides |
-| `serve.h` / `serve.c` | Server harness: `proto_serve()` accept/fork loop with built-in authentication |
+| `serve.h` / `serve.c` | Server harness: `proto_serve()` accept/fork loop with built-in authentication, and `proto_serve_stop()` to end it cleanly |
 | `keygen/` | Standalone CLI tool that generates the key files (`auth.key`, `auth.pub`, `enc.key`) — not part of the library sources |
 
 ## Documentation
