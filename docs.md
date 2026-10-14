@@ -346,7 +346,7 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms`, `proto_load_keys` and `proto_load_pubkey_hex` with a `NULL` path |
+| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms`, `proto_load_keys` with a `NULL` path or `out`, `proto_load_pubkey_hex` with a `NULL` path |
 | `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 lowercase hex chars — uppercase is refused too, since it would match no identity | `proto_serve` |
@@ -839,18 +839,19 @@ derive both public keys into `out`.
 |---|---|
 | `auth_sk_path` | path to `auth.key` (base64 Ed25519 secret, 64 B decoded) |
 | `enc_sk_path` | path to `enc.key` (base64 X25519 secret, 32 B decoded) |
-| `out` | filled on success |
+| `out` | filled on success; wiped on failure, including a key that had loaded before the other file failed, so there is nothing to clean up |
 
-**Returns** `PROTO_OK`, `PROTO_E_PARAM` for a `NULL` path, or one of the
-[key file codes](#error-codes), each pointing at a different thing to check:
-the path (`PROTO_E_KEY_NOT_FOUND`, `PROTO_E_KEY_NOT_FILE`), the permissions
-(`PROTO_E_KEY_DENIED`), the system (`PROTO_E_KEY_OPEN`, `PROTO_E_KEY_READ`)
-or the contents (`PROTO_E_KEY_EMPTY`, `PROTO_E_KEY_STRAY`,
-`PROTO_E_KEY_FORMAT`, `PROTO_E_KEY_SIZE`). The code says
+**Returns** `PROTO_OK`, `PROTO_E_PARAM` for a `NULL` path or `out`, or one
+of the [key file codes](#error-codes), each pointing at a different thing to
+check: the path (`PROTO_E_KEY_NOT_FOUND`, `PROTO_E_KEY_NOT_FILE`), the
+permissions (`PROTO_E_KEY_DENIED`), the system (`PROTO_E_KEY_OPEN`,
+`PROTO_E_KEY_READ`) or the contents (`PROTO_E_KEY_EMPTY`,
+`PROTO_E_KEY_STRAY`, `PROTO_E_KEY_FORMAT`, `PROTO_E_KEY_SIZE`). The code says
 what went wrong but not which of the two files: call it once per file if you
 need that distinction. The exception is `PROTO_E_KEY_MISMATCH`, which only
 `auth.key` can cause: its public half does not match its seed, so the file
-is damaged. Nothing is printed — pass the code to
+is damaged. On any failure `out` is wiped, so nothing that had loaded is
+left behind. Nothing is printed — pass the code to
 [`proto_strerror`](#error-codes) and log it where you want.
 
 ```c

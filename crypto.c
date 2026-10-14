@@ -106,11 +106,13 @@ int proto_init(void) {
 int proto_load_keys(const char *auth_sk_path,
                     const char *enc_sk_path,
                     proto_keys_t *out) {
+    if (!out) return PROTO_E_PARAM;
+
     /* Ed25519 authentication private key (64 bytes). The code says what went
      * wrong but not which of the two files; call this once per file if that
      * distinction matters. */
     int rc = read_b64_key(auth_sk_path, out->auth_sk, AUTH_SK_LEN);
-    if (rc != PROTO_OK) return rc;
+    if (rc != PROTO_OK) goto fail;
 
     /* In libsodium, auth_sk = seed(32) || pubkey(32), and the seed alone
      * determines both keys: the second half is a copy, which a file written
@@ -125,16 +127,23 @@ int proto_load_keys(const char *auth_sk_path,
     sodium_memzero(seed, sizeof seed);
     sodium_memzero(sk, sizeof sk);
     if (memcmp(out->auth_pk, out->auth_sk + 32, AUTH_PK_LEN) != 0) {
-        sodium_memzero(out->auth_sk, AUTH_SK_LEN);   /* not a key to keep around */
-        return PROTO_E_KEY_MISMATCH;
+        rc = PROTO_E_KEY_MISMATCH;
+        goto fail;
     }
 
     /* X25519 encryption private key (32 bytes) */
     rc = read_b64_key(enc_sk_path, out->enc_sk, ENC_SK_LEN);
-    if (rc != PROTO_OK) return rc;
+    if (rc != PROTO_OK) goto fail;
 
     crypto_scalarmult_base(out->enc_pk, out->enc_sk);
     return PROTO_OK;
+
+fail:
+    /* A failed load leaves nothing behind. The caller sees an error and has
+     * no reason to wipe keys it believes were never loaded, yet auth.key may
+     * have loaded fine before enc.key failed. */
+    sodium_memzero(out, sizeof *out);
+    return rc;
 }
 
 int proto_load_pubkey_hex(const char *path, char *hex_out, size_t hex_sz) {
