@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <time.h>
 #include <sys/types.h>
@@ -40,6 +42,64 @@ static int is_identity_hex(const char *s) {
     return s[AUTH_PK_LEN * 2] == '\0';
 }
 
+/* All that proto_serve_stop() touches. It may run in a signal handler or on
+ * another thread, so it reads and writes nothing else. stop_asked is the
+ * request itself, and it waits for a proto_serve that has not started yet;
+ * stop_fd only wakes the loop so that it looks at it. */
+static volatile sig_atomic_t stop_asked = 0;
+static volatile sig_atomic_t stop_fd    = -1;
+static volatile sig_atomic_t in_child   = 0;
+
+/* The channel stop_fd writes into. Created by the first proto_serve and
+ * never closed in this process: a proto_serve_stop() on another thread may
+ * be about to write to it, and a closed number could by then belong to
+ * another file. */
+static int wake[2] = { -1, -1 };
+
+void proto_serve_stop(void) {
+    /* A child inherits the application's handler, but stopping is the
+     * parent's business: end the child as the signal would have without
+     * that handler. Ending it gracefully comes with v2.0 (TODO.md). */
+    if (in_child) _exit(0);
+    /* One byte per stop wakes the loop, so the channel never fills. */
+    if (stop_asked) return;
+    int saved = errno;
+    stop_asked = 1;
+    int fd = stop_fd;
+    if (fd >= 0) {
+        ssize_t n = write(fd, "", 1);
+        (void)n;
+    }
+    errno = saved;
+}
+
+/* Milliseconds on a clock that never jumps. A copy of the one in wire.c,
+ * which keeps it private. */
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Give the children up to ms to finish, returning as soon as none is left.
+ * waitpid() asks the kernel whether any remains, so nothing has to count
+ * them, and it collects the ones the reaper has not. A child exiting cuts
+ * the sleep short; the 100 ms only bound one that exits just before it.
+ * Children the application forked itself count too: the kernel does not
+ * tell them apart. */
+static void drain(int ms) {
+    long long deadline = now_ms() + ms;
+    for (;;) {
+        pid_t r = waitpid(-1, NULL, WNOHANG);
+        if (r < 0) return;                  /* none left */
+        if (r > 0) continue;                /* collected one; look again */
+        long long left = deadline - now_ms();
+        if (left <= 0) return;
+        if (left > 100) left = 100;
+        nanosleep(&(struct timespec){ 0, (long)left * 1000000 }, NULL);
+    }
+}
+
 int proto_serve(int port, const char *allowed_hex,
                 proto_handler_fn handler, void *ctx,
                 const proto_serve_opts_t *opts) {
@@ -61,6 +121,10 @@ int proto_serve(int port, const char *allowed_hex,
     if (opts && opts->bind_addr
         && inet_pton(AF_INET, opts->bind_addr, &bind_addr) != 1)
         return PROTO_E_BAD_ADDRESS;
+    /* A negative wait means nothing here. Read as 0 it would hide the
+     * mistake, and -1 is not "forever" as it is for poll(): refuse it. */
+    int drain_ms = opts ? opts->drain_ms : 0;
+    if (drain_ms < 0) return PROTO_E_PARAM;
 
     int rc = proto_init();
     if (rc != PROTO_OK) return rc;
@@ -96,7 +160,51 @@ int proto_serve(int port, const char *allowed_hex,
     }
     if (listen(srv, 16) < 0) { close(srv); return PROTO_E_LISTEN; }
 
-    for (;;) {
+    /* The channel a stop wakes the loop through. A socket pair rather than
+     * a pipe, so that failing to create it is honestly PROTO_E_SOCKET. Both
+     * ends non-blocking: the loop empties it without waiting, and a stop
+     * never blocks in the handler it runs in. */
+    if (wake[0] < 0) {
+        int p[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, p) < 0) {
+            close(srv);
+            return PROTO_E_SOCKET;
+        }
+        fcntl(p[0], F_SETFL, O_NONBLOCK);
+        fcntl(p[1], F_SETFL, O_NONBLOCK);
+        wake[0] = p[0];
+        wake[1] = p[1];
+        stop_fd = p[1];
+    }
+
+    /* A stop asked before this point is seen here, once the server is set
+     * up, so that a setup error is still reported. */
+    while (!stop_asked) {
+        /* Wait for a client or a stop. A blocking accept() would not do: a
+         * signal does not break it out of its wait (the kernel restarts it,
+         * or the loop retries it), so a stop would go unseen until the next
+         * client arrived. */
+        struct pollfd ready[2] = { { .fd = srv,     .events = POLLIN },
+                                   { .fd = wake[0], .events = POLLIN } };
+        if (poll(ready, 2, -1) < 0) {
+            /* A signal: look at the flag again. Anything else is a passing
+             * shortage of memory; pause as for accept() below. */
+            if (errno != EINTR)
+                nanosleep(&(struct timespec){ 0, 100 * 1000000 }, NULL);
+            continue;
+        }
+        if (ready[1].revents) {
+            /* Empty the channel: its byte has done its job, and one left by
+             * an earlier stop would wake the loop forever. */
+            char drop[16];
+            while (read(wake[0], drop, sizeof drop) > 0)
+                ;
+        }
+        /* A stop wins over a waiting client. Any event on the listener goes
+         * to accept(), not only POLLIN: if the socket has broken, accept()
+         * is what reports it, and skipping it would spin. */
+        if (stop_asked || !ready[0].revents) continue;
+
         int cli = accept(srv, NULL, NULL);
         if (cli < 0) {
             /* A signal, or a peer that gave up before we got to it: retry. */
@@ -131,6 +239,12 @@ int proto_serve(int port, const char *allowed_hex,
             continue;
         }
         if (pid == 0) {
+            /* From here a stop ends this child (see proto_serve_stop); set
+             * first, so that none can write to the channel being closed.
+             * The channel and the listener are the parent's. */
+            in_child = 1;
+            close(wake[0]);
+            close(wake[1]);
             close(srv);
             /* The reaper is the parent's: it collects the connections' children.
              * Inherited, it would collect the handler's own — a popen() whose
@@ -150,5 +264,15 @@ int proto_serve(int port, const char *allowed_hex,
         }
         close(cli);
     }
-    /* not reached */
+
+    /* Stopped. The port is free from here: the children closed their copy
+     * of the listener when they were forked. The connections in progress
+     * are untouched, each on its own socket, and get drain_ms to finish.
+     * The channel stays open for the next proto_serve. */
+    close(srv);
+    drain(drain_ms);
+    /* Consumed. A stop asked while draining was this one; one asked from
+     * now on is for the next proto_serve. */
+    stop_asked = 0;
+    return PROTO_OK;
 }
