@@ -41,13 +41,18 @@ static int read_b64_key(const char *path,
     if (!S_ISREG(st.st_mode)) { close(fd); return PROTO_E_KEY_NOT_FILE; }
 
     /* A key line is under 100 characters. Read until the first newline, the
-     * end of the file or a full buffer, whichever comes first. */
+     * end of the file or a full buffer, whichever comes first. The buffer
+     * holds the key in base64, so every way out from here wipes it. */
     char line[512];
     size_t l = 0;
     while (l < sizeof line - 1) {
         ssize_t n = read(fd, line + l, sizeof line - 1 - l);
         if (n < 0 && errno == EINTR) continue;
-        if (n < 0) { close(fd); return PROTO_E_KEY_READ; }
+        if (n < 0) {
+            close(fd);
+            sodium_memzero(line, sizeof line);
+            return PROTO_E_KEY_READ;
+        }
         if (n == 0) break;
         l += (size_t)n;
         if (memchr(line + l - (size_t)n, '\n', (size_t)n)) break;
@@ -67,25 +72,30 @@ static int read_b64_key(const char *path,
      * byte order mark an editor added, a non-breaking space pasted from a
      * web page — cannot be seen in an editor, which is why each kind has a
      * code of its own. */
-    if (strspn(line, " \t") == l) return PROTO_E_KEY_EMPTY;
-    if (!is_b64_char(line[0]) || !is_b64_char(line[l-1]))
-        return PROTO_E_KEY_STRAY;
-
-    /* Decode into room for anything the line can hold, so that a key of
-     * the wrong size — usually the wrong file — is told apart from text
-     * that is not base64. The buffer holds key material: wipe it. */
-    unsigned char bin[sizeof line / 4 * 3];
-    size_t bin_len = 0;
-    int rc = PROTO_OK;
-    if (sodium_base642bin(bin, sizeof bin, line, l,
-                          NULL, &bin_len, NULL,
-                          sodium_base64_VARIANT_ORIGINAL) != 0)
-        rc = PROTO_E_KEY_FORMAT;
-    else if (bin_len != expected_len)
-        rc = PROTO_E_KEY_SIZE;
-    else
-        memcpy(out, bin, expected_len);
-    sodium_memzero(bin, sizeof bin);
+    int rc;
+    if (strspn(line, " \t") == l)
+        rc = PROTO_E_KEY_EMPTY;
+    else if (!is_b64_char(line[0]) || !is_b64_char(line[l-1]))
+        rc = PROTO_E_KEY_STRAY;
+    else {
+        /* Decode into room for anything the line can hold, so that a key
+         * of the wrong size — usually the wrong file — is told apart from
+         * text that is not base64. This buffer holds the key too. */
+        unsigned char bin[sizeof line / 4 * 3];
+        size_t bin_len = 0;
+        if (sodium_base642bin(bin, sizeof bin, line, l,
+                              NULL, &bin_len, NULL,
+                              sodium_base64_VARIANT_ORIGINAL) != 0)
+            rc = PROTO_E_KEY_FORMAT;
+        else if (bin_len != expected_len)
+            rc = PROTO_E_KEY_SIZE;
+        else {
+            memcpy(out, bin, expected_len);
+            rc = PROTO_OK;
+        }
+        sodium_memzero(bin, sizeof bin);
+    }
+    sodium_memzero(line, sizeof line);
     return rc;
 }
 
