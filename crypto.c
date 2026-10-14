@@ -1,6 +1,7 @@
 #include "crypto.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -159,9 +160,20 @@ int proto_load_pubkey_hex(const char *path, char *hex_out, size_t hex_sz) {
     return PROTO_OK;
 }
 
+/* The largest message proto_seal takes. Past it, the sealed size and that
+ * size in base64 no longer fit in a size_t: the arithmetic wraps to a small
+ * number, the buffer check passes, and libsodium aborts the process — or,
+ * just below its own limit, writes past the buffer. Nobody has a message
+ * that size: it is what a negative number becomes as a size, 0 - 1 or the
+ * -1 of a failed read(). About 13.8 EB on 64 bits and 3.2 GB on 32; the 5
+ * covers the padding and terminator base64 adds. It stays below
+ * crypto_box_MESSAGEBYTES_MAX, so libsodium's own check never fires. */
+#define SEAL_MSG_MAX ((SIZE_MAX - 5) / 4 * 3 - crypto_box_SEALBYTES)
+
 int proto_seal(const unsigned char *msg, size_t msg_len,
                const unsigned char *enc_pk,
                char *out_b64, size_t out_b64_sz) {
+    if (msg_len > SEAL_MSG_MAX) return PROTO_E_PARAM;
     size_t cipher_len = msg_len + crypto_box_SEALBYTES;
 
     /* sodium_bin2base64 aborts the process on an undersized buffer, so check

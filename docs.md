@@ -346,7 +346,7 @@ the sign rule and the successes.
 
 | Code | Value | Meaning | Returned by |
 |---|---|---|---|
-| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms`, `proto_load_keys` with a `NULL` path or `out`, `proto_load_pubkey_hex` with a `NULL` path |
+| `PROTO_E_PARAM` | `-101` | invalid argument | `proto_recv_line` with `bufsz == 0`, `proto_serve` with a negative `opts->drain_ms`, `proto_load_keys` with a `NULL` path or `out`, `proto_load_pubkey_hex` with a `NULL` path, `proto_seal` with a `msg_len` no message can have |
 | `PROTO_E_BUFFER_TOO_SMALL` | `-102` | caller buffer cannot hold the result | `proto_load_pubkey_hex`, `proto_seal` |
 | `PROTO_E_NO_ALLOWLIST` | `-103` | `allowed_hex` is `NULL` | `proto_serve` |
 | `PROTO_E_BAD_ALLOWLIST` | `-104` | `allowed_hex` is not 64 lowercase hex chars — uppercase is refused too, since it would match no identity | `proto_serve` |
@@ -906,6 +906,14 @@ the caller.)
 **Returns** `PROTO_OK`, `PROTO_E_BUFFER_TOO_SMALL` if `out_b64_sz` is below
 the size given above, `PROTO_E_NOMEM`, or `PROTO_E_CRYPTO`. Binary-safe:
 `msg` may contain NUL bytes.
+
+`PROTO_E_PARAM` if `msg_len` is a size no message can have — above about
+13.8 EB on 64 bits, 3.2 GB on 32. That is what a negative number becomes
+as a `size_t`: `len - 1` on an empty string, or the `-1` of a failed
+`read()` passed on as a length. Without the check the size computations
+would wrap to a small number, pass the buffer check, and libsodium would
+abort the process. A message that is merely large is not refused; if there
+is no memory for it, the answer is `PROTO_E_NOMEM`.
 
 Note: sealing needs only the **public** key — any holder of `enc_pk` can
 write blobs that only the `enc_sk` holder can read.

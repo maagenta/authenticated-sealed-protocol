@@ -38,8 +38,10 @@ int proto_load_pubkey_hex(const char *path, char *hex_out, size_t hex_sz);
 /* Seal a message to enc_pk (anonymous sealed box), base64 into out_b64.
  * out_b64_sz must be >= sodium_base64_ENCODED_LEN(msg_len +
  * crypto_box_SEALBYTES, sodium_base64_VARIANT_ORIGINAL), which already counts
- * the trailing NUL. Returns PROTO_OK, PROTO_E_BUFFER_TOO_SMALL,
- * PROTO_E_NOMEM or PROTO_E_CRYPTO. */
+ * the trailing NUL. Returns PROTO_OK, PROTO_E_PARAM for a msg_len no
+ * message can have (a negative number turned into a size_t: 0 - 1, or the
+ * -1 of a failed read), PROTO_E_BUFFER_TOO_SMALL, PROTO_E_NOMEM or
+ * PROTO_E_CRYPTO. */
 int proto_seal(const unsigned char *msg, size_t msg_len,
                const unsigned char *enc_pk,
                char *out_b64, size_t out_b64_sz);
