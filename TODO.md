@@ -193,6 +193,38 @@ a format marker has to tell old from new, or a first v2.0 run re-signs
 them. It is independent of the channel decision above, and it protects
 against the one party a channel cannot: the server.
 
+## Key files that say what they hold — v2.0
+
+**What is missing.** A key file is one line of base64, and nothing in it
+says which key it holds or whose. `enc.key` and `auth.pub` are both 32
+bytes, so either can stand in for the other. Since v1.2 `proto_load_keys`
+refuses `auth.pub` given as `enc.key`, because it can compare it with the
+public key it derives from `auth.key`; that is the only swap it can tell.
+`enc.key` given to `proto_load_pubkey_hex` on the server still loads, with
+the client's secret now on the server, and nothing tells `auth.key` and
+`enc.key` of two different identities apart.
+
+**The design.** A second line in every key file, written by `keygen` and
+checked by the readers:
+
+    <the key, in base64>
+    # enc.key 3f9a…c21e
+
+It says which key the file holds — `auth.key`, `auth.pub` or `enc.key`,
+and the server's pair if the channel above brings one — and which identity
+it belongs to: the SHA-256 of `auth_pk`, the same in every file of one
+identity. `auth_pk` is public, so the label gives nothing away. A reader
+given the wrong kind of key, or keys of two identities, refuses them with
+a code of its own. A v1.x library reads only the first line, so it loads
+the new files unchanged. The label guards against mistakes, not against
+an attacker: whoever can edit the file can edit the label.
+
+**Why v2.0.** It changes the key file format, which is part of the
+library's contract. Files written before it carry no label and must still
+load, so for them the check does nothing; the v1.2 comparison keeps
+covering the one swap it can tell. The format changes once, with the
+version that may add the server's keys anyway.
+
 ## Other pending work
 
 - **Tests.** The structure and `test.h` are agreed; nothing is written.
