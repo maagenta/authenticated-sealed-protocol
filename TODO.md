@@ -202,5 +202,3 @@ against the one party a channel cannot: the server.
   exercised on macOS with clang; the Linux paths (`TCP_KEEPIDLE`, the
   busy-loop `accept` case, the kernel's own connect timeout) are reasoned
   about, not measured.
-- **`crypto.c` has never been read line by line — v1.2.** Its absence from
-  the fixed list means nobody looked, not that it is clean.
