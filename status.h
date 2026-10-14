@@ -48,6 +48,7 @@ typedef enum {
     PROTO_E_KEY_READ           = -308,  /* read() failed after opening       */
     PROTO_E_KEY_STRAY          = -309,  /* characters around the key         */
     PROTO_E_KEY_SIZE           = -310,  /* base64 of the wrong size          */
+    PROTO_E_KEY_PUBLIC         = -311,  /* public key where a secret belongs */
 
     /* -4xx: cryptography */
     PROTO_E_CRYPTO             = -401,  /* libsodium operation failed        */

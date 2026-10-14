@@ -27,6 +27,7 @@ const char *proto_strerror(int code) {
     case PROTO_E_KEY_READ:          return "could not read key file";
     case PROTO_E_KEY_STRAY:         return "key file has stray characters around the key (a space, a tab or an invisible mark)";
     case PROTO_E_KEY_SIZE:          return "key file holds a key of the wrong size: probably the wrong file";
+    case PROTO_E_KEY_PUBLIC:        return "key file holds the identity's public key where a secret key belongs: auth.pub given as enc.key";
 
     case PROTO_E_CRYPTO:            return "cryptographic operation failed";
     case PROTO_E_BAD_SIGNATURE:     return "signature verification failed";

@@ -154,6 +154,15 @@ Notes:
 - The X25519 public key is derived from `enc.key` via `crypto_scalarmult_base`
   — there is no `enc.pub` file. The server learns it through the `REGISTER`
   step instead.
+- `auth.pub` given where `enc.key` belongs is refused with
+  `PROTO_E_KEY_PUBLIC`. The size cannot tell the two apart, and loaded it
+  would work without an error, while anyone who knows the identity — every
+  `AUTH` line carries it, the server keeps it — could open everything the
+  client seals. `proto_load_keys` catches it by comparing the key with the
+  public key it derives from `auth.key`. The opposite mistake cannot be
+  caught: `enc.key` given to `proto_load_pubkey_hex` loads, and the server
+  then refuses the client with `FAIL access denied`; that file is the
+  client's secret and must not stay on the server.
 - The **identity** of a client is `hex(auth_pk)`: 64 lowercase hex chars.
   This is what `proto_auth_server` returns, what `proto_conn_t.identity_hex`
   holds, and what servers should use as the user key in storage.
@@ -375,6 +384,7 @@ the sign rule and the successes.
 | `PROTO_E_KEY_READ` | `-308` | `read()` failed after the file was opened: a disk or filesystem error | idem |
 | `PROTO_E_KEY_STRAY` | `-309` | something around the key on its line: a space or a tab, a byte order mark an editor added, a non-breaking space pasted from a web page, quotes. Usually invisible in an editor | idem |
 | `PROTO_E_KEY_SIZE` | `-310` | valid base64 of the wrong size — usually the wrong file, such as `auth.pub` where `auth.key` belongs. Given to `proto_load_pubkey_hex`, it usually means `auth.key`, the client's secret, has been copied to the server | idem |
+| `PROTO_E_KEY_PUBLIC` | `-311` | the encryption key file holds the identity's public key: `auth.pub` given where `enc.key` belongs. Loaded, it would let anyone who knows the identity open everything the client seals | `proto_load_keys` |
 
 **Cryptography**
 
@@ -848,10 +858,12 @@ permissions (`PROTO_E_KEY_DENIED`), the system (`PROTO_E_KEY_OPEN`,
 `PROTO_E_KEY_READ`) or the contents (`PROTO_E_KEY_EMPTY`,
 `PROTO_E_KEY_STRAY`, `PROTO_E_KEY_FORMAT`, `PROTO_E_KEY_SIZE`). The code says
 what went wrong but not which of the two files: call it once per file if you
-need that distinction. The exception is `PROTO_E_KEY_MISMATCH`, which only
+need that distinction. There are two exceptions. `PROTO_E_KEY_MISMATCH` only
 `auth.key` can cause: its public half does not match its seed, so the file
-is damaged. On any failure `out` is wiped, so nothing that had loaded is
-left behind. Nothing is printed — pass the code to
+is damaged. `PROTO_E_KEY_PUBLIC` only `enc.key` can cause: it holds the
+identity's public key, `auth.pub` given in its place (see
+[Key files](#key-files--formats)). On any failure `out` is wiped, so nothing
+that had loaded is left behind. Nothing is printed — pass the code to
 [`proto_strerror`](#error-codes) and log it where you want.
 
 ```c

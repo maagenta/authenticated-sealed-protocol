@@ -136,6 +136,18 @@ int proto_load_keys(const char *auth_sk_path,
     rc = read_b64_key(enc_sk_path, out->enc_sk, ENC_SK_LEN);
     if (rc != PROTO_OK) goto fail;
 
+    /* auth.pub is 32 bytes as well, so given where enc.key belongs it loads:
+     * any 32 bytes make an X25519 secret key, and nothing fails afterwards.
+     * But its key is the identity, which every AUTH line carries in the
+     * clear and the server keeps as its allowlist: anyone who knows the
+     * identity could open everything the client seals. It is also the public
+     * key just derived from auth.key, which tells the mistake apart. The
+     * comparison takes constant time, since a real enc_sk is a secret. */
+    if (sodium_memcmp(out->enc_sk, out->auth_pk, ENC_SK_LEN) == 0) {
+        rc = PROTO_E_KEY_PUBLIC;
+        goto fail;
+    }
+
     crypto_scalarmult_base(out->enc_pk, out->enc_sk);
     return PROTO_OK;
 
