@@ -122,9 +122,10 @@ The attacker can then cut the connection, and nothing more.
 | A secure channel of the library's own | `server.key` / `server.pub` | a protocol redesign, and an outside review |
 | TLS inside the library | a certificate | a dependency, and the end of "No TLS by design" |
 
-- **The tunnel.** SSH, WireGuard or stunnel, required on any network that
-  is not trusted. No code; the deployment carries the burden, and an
-  application that skips the tunnel is exposed without knowing it.
+- **The tunnel.** SSH, WireGuard or stunnel stays the answer, recommended
+  wherever the network is not trusted. No code; the deployment carries the
+  burden, and an application that skips the tunnel is exposed without
+  knowing it.
 - **A channel of the library's own.** A third key pair, the server's:
   `server.key` stays on the server, `server.pub` goes to every client —
   copied like `auth.pub` in reverse, or recorded at the first connection
@@ -151,8 +152,9 @@ keys would be:
 | Server (Ed25519) | `server.key`, on the server | `server.pub`, on every client | who the server is | new |
 | Session (X25519) | in memory, one per connection | — | every message of that connection | new, never a file |
 
-**Until then.** The tunnel is required on any network that is not trusted.
-The trust model in `architecture.md` is to say so in v1.2 (below).
+**Until then.** A tunnel is recommended on any network that is not
+trusted, and the trust model in `architecture.md` says what goes
+unprotected without one.
 
 ## Signed entries — v2.0
 
@@ -202,11 +204,3 @@ against the one party a channel cannot: the server.
   about, not measured.
 - **`crypto.c` has never been read line by line — v1.2.** Its absence from
   the fixed list means nobody looked, not that it is clean.
-- **The trust model understates an active attacker — v1.2.**
-  `architecture.md` says only someone holding `auth.key` can delete or
-  overwrite, and offers the tunnel as optional, for metadata. Against the
-  relay above neither holds, and a compromised server can forge entries
-  (signed entries, above). The trust model, and the FAQ entry "Is the
-  connection encrypted?", should say what is protected — reading — and
-  what is not — deleting, forging, rolling back — and that the tunnel is
-  required on any network that is not trusted.

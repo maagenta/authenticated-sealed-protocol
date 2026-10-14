@@ -442,15 +442,35 @@ The server is an *authenticated dumb blob store*:
 - It verifies who is talking, then stores/returns ciphertext it cannot open.
 - Entry contents are encrypted with `crypto_box_seal` to the client's X25519
   public key. Decryption requires `enc.key`, which **never leaves the client**.
-- A passive eavesdropper sees: command verbs, ids, timestamps, public keys,
-  and base64 ciphertext. They do not see payload contents.
-- There is deliberately **no TLS**: confidentiality of the payload comes from
-  the sealed boxes, not the channel. What TLS would add is hiding the
-  *metadata* (verbs, ids, timing) and authenticating the *server*; if either
-  matters for a given deployment, tunnel the connection (SSH/WireGuard/stunnel).
-- Compromise of the server loses **availability and metadata, not contents**.
-- Compromise of `auth.key` lets an attacker connect and delete/overwrite;
-  compromise of `enc.key` lets them decrypt blobs they obtain. Guard both.
+
+**What is protected: reading.** Nobody without `enc.key` can read an entry —
+not an eavesdropper, not an attacker in the middle of the connection, not
+the server or whoever runs it. A passive eavesdropper sees command verbs,
+ids, timestamps, public keys and base64 ciphertext, never payload contents.
+
+**What is not: changing.** The protocol keeps what an entry says from being
+read, not from being changed:
+
+- **An attacker in the middle of the connection** — a forged DNS answer, a
+  hostile Wi-Fi, a compromised router — can relay the handshake and hold a
+  session as the user without `auth.key`, because the server is not
+  authenticated to the client and nothing after the handshake is
+  protected. With it, it can delete entries, answer `OK` to a write it
+  never forwards, move old ciphertexts back in place of newer ones, and
+  fetch the whole stored history.
+- **The server**, or whoever runs it, can do the same, and can also add
+  entries that decrypt as genuine: sealed boxes are anonymous, and
+  `REGISTER` gives the server `enc_pk`, which is all it takes to make one.
+- **Whoever holds `auth.key`** can connect and delete or overwrite;
+  whoever holds `enc.key` can decrypt every blob they obtain. Guard both.
+
+There is deliberately **no TLS**: confidentiality of the payload comes from
+the sealed boxes, not the channel. A tunnel — SSH, WireGuard, stunnel —
+adds what the protocol lacks on the wire: it authenticates the server and
+protects every message, which stops the attacker in the middle, and it
+hides the metadata. It is recommended wherever the network is not trusted.
+It does nothing against the server itself. Both gaps are designed for v2.0
+in `TODO.md`: a protected channel, and entries signed by the client.
 
 ## Framing rules
 

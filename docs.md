@@ -1870,8 +1870,12 @@ the same data. There is no session exclusivity.
 
 **Is the connection encrypted?**
 Payloads are; the command lines (verbs, ids, timestamps) are not, and the
-server is not authenticated to the client. If metadata privacy or
-server authentication matters, run the TCP connection through SSH/WireGuard.
+server is not authenticated to the client. Nobody without `enc.key` can
+read an entry, but someone who can intercept the connection can relay the
+handshake and act as the user for that session — delete, overwrite, put
+old entries back — without `auth.key`. A tunnel (SSH, WireGuard) closes
+that and hides the metadata; it is recommended on any network you do not
+trust. See the [trust model](architecture.md#trust-model).
 
 **Why does `proto_unseal_new` need both `enc_pk` and `enc_sk`?**
 libsodium's `crypto_box_seal_open` requires the recipient's public *and*
