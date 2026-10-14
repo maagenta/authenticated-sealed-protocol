@@ -1150,6 +1150,14 @@ expects.
 authorized keys, pre-auth connection logging, or non-TCP transports — write
 your own accept loop around `proto_auth_server` instead (recipe below).
 
+**One per process.** Run one `proto_serve` at a time in a process.
+[`proto_serve_stop`](#proto_serve_stop) is safe to call from any thread, but
+there is one stop per process, not one per server: with two servers running
+in two threads, a stop could end only one of them. Two ports, two specific
+interfaces or two keys are better served by two processes — each has its
+own stop — or by your own accept loop around `proto_auth_server` (recipe
+below).
+
 ```c
 int main(void) {
     if (proto_init() != 0) return 1;

@@ -27,23 +27,54 @@ typedef struct {
      * listens on every interface. No name resolution: a bind address is a
      * deployment fact, and what a name resolves to at startup is not one. */
     const char *bind_addr;
+
+    /* Once proto_serve_stop() is called, how long proto_serve waits for the
+     * connections in progress to end before it returns, in milliseconds;
+     * it returns sooner if the last one ends first. 0 does not wait, and
+     * a negative value fails with PROTO_E_PARAM. A connection still open
+     * when the time runs out is left running. */
+    int drain_ms;
 } proto_serve_opts_t;
 
 /*
  * Turnkey server harness: init libsodium, ignore SIGPIPE, reap children,
  * bind/listen on port, then accept + fork per connection. Each connection is
  * authenticated against allowed_hex; handler is invoked only for authorized
- * clients. opts may be NULL for the defaults. Returns only when it cannot
- * serve: on a setup error, PROTO_E_NO_ALLOWLIST, PROTO_E_BAD_ALLOWLIST,
- * PROTO_E_NO_HANDLER, PROTO_E_BAD_PORT, PROTO_E_BAD_ADDRESS, PROTO_E_SODIUM,
- * PROTO_E_SOCKET, PROTO_E_PORT_IN_USE, PROTO_E_PERM_DENIED, PROTO_E_BIND or
- * PROTO_E_LISTEN; later, PROTO_E_ACCEPT if the listening socket stops
- * working. Running out of descriptors or processes is not fatal: accept()
- * is retried after a pause, and a client that cannot be forked for is told
- * "FAIL server busy" and closed.
+ * clients. opts may be NULL for the defaults.
+ *
+ * Returns PROTO_OK after proto_serve_stop(): the port is closed and the
+ * children have had opts->drain_ms to finish. Otherwise it returns only
+ * when it cannot serve: on a setup error, PROTO_E_NO_ALLOWLIST,
+ * PROTO_E_BAD_ALLOWLIST, PROTO_E_NO_HANDLER, PROTO_E_BAD_PORT,
+ * PROTO_E_BAD_ADDRESS, PROTO_E_PARAM, PROTO_E_SODIUM, PROTO_E_SOCKET,
+ * PROTO_E_PORT_IN_USE, PROTO_E_PERM_DENIED, PROTO_E_BIND or PROTO_E_LISTEN;
+ * later, PROTO_E_ACCEPT if the listening socket stops working. Running out
+ * of descriptors or processes is not fatal: accept() is retried after a
+ * pause, and a client that cannot be forked for is told "FAIL server busy"
+ * and closed.
  */
 int proto_serve(int port, const char *allowed_hex,
                 proto_handler_fn handler, void *ctx,
                 const proto_serve_opts_t *opts);
+
+/*
+ * Ask the running proto_serve to stop: it accepts no one else, closes the
+ * port, waits up to opts->drain_ms for the connections in progress, and
+ * returns PROTO_OK. Safe to call from a signal handler or from any thread:
+ * it only sets a flag and writes one byte to a channel that is never
+ * closed, and it leaves errno as it found it. The library takes no signal
+ * for itself; the application routes the ones it wants here:
+ *
+ *     static void on_term(int sig) { (void)sig; proto_serve_stop(); }
+ *     ...
+ *     signal(SIGTERM, on_term);
+ *     if (proto_serve(port, allowed, handler, ctx, &opts) == PROTO_OK)
+ *         ... close storage, exit 0 ...
+ *
+ * In a forked child, where the handler is inherited, it ends the child at
+ * once — what the signal would have done without the handler; stopping a
+ * child gracefully comes with bidirectionality, in v2.0.
+ */
+void proto_serve_stop(void);
 
 #endif /* PROTO_SERVE_H */
