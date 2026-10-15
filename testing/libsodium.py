@@ -88,6 +88,18 @@ def b64d(text):
     return base64.b64decode(text, validate=True)
 
 
+def base642bin(text):
+    """sodium_base642bin with the standard alphabet and nothing to skip: the bytes, or None when it refuses."""
+    d = S()
+    d.sodium_base642bin.restype = ctypes.c_int
+    d.sodium_base642bin.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t,
+                                    ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_int]
+    out = ctypes.create_string_buffer(len(text) + 3)
+    n = ctypes.c_size_t(0)
+    rc = d.sodium_base642bin(out, len(out), text, len(text), None, ctypes.byref(n), None, 1)
+    return None if rc != 0 else out.raw[:n.value]
+
+
 def hexlower(raw):
     return raw.hex()
 

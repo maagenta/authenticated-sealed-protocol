@@ -4,7 +4,7 @@ This directory holds the test suite of the library and the harness that runs it,
 on a developer's machine and in CI. Every test has an entry in this file, in the
 order of the library: build, status codes, wire, key files, cryptography,
 handshake, connecting, serving, the `keygen` tool, end to end, sanitizers and
-fuzzing. The entry says what the test does and what it
+fuzzing, documentation, load. The entry says what the test does and what it
 expects; the `Code:` line says where it is.
 
 The suite checks what the code and the documents (`docs.md`, `architecture.md`,
@@ -22,6 +22,7 @@ python3 testing/run.py --id T-057           one test; ranges and lists too: T-05
 python3 testing/run.py --tag seam           every test with a tag
 python3 testing/run.py --slow               also the slow tests (nightly in CI)
 python3 testing/run.py --fuzz               also the fuzz targets (--fuzz-seconds N for each)
+python3 testing/run.py --soak-seconds N     how long the soak test T-422 runs (default 60)
 python3 testing/run.py --list               what there is, and what this host skips
 python3 testing/run.py --check              README.md against the registered tests
 python3 testing/run.py --record-baselines   rewrite the warning and analyzer baselines
@@ -78,6 +79,7 @@ only run there, `(root)` needs privileges, `(not as root)` must not have them,
 | `PROTO_TEST_TIMEOUT` | Seconds a test may run before it is killed (default 60). |
 | `PROTO_FUZZ_SECONDS` | Time budget of each fuzz target (default 20; CI uses 60, nightly 300). |
 | `PROTO_FUZZ_SEED` | The seed of the fuzz targets, to repeat a run (default: the time). |
+| `PROTO_SOAK_SECONDS`, `PROTO_SOAK_SEED` | How long the soak test T-422 runs (default 60; nightly 300), and the seed of its random sessions. |
 | `PROTO_TEST_SRC` | A directory with a copy of the sources to build instead of the real ones: the mutation test (T-406) points it at copies with one expression altered. |
 
 ## How a test runs
@@ -145,7 +147,15 @@ second so that a crash of the library is caught, and checks the result against a
 model of what the library must do. An input that breaks a property is written to
 `corpus/<target>/crash-<hash>` and stays there: T-404 replays every file of
 `corpus/` on every run, so a fixed defect cannot come back. The seeds are
-generated the same way each time.
+generated the same way each time. The two crash files kept today are the inputs
+that found T-424 and T-425; both pass when those findings are fixed.
+
+**Load.** The tests of section XXV are all slow and run nightly. They measure what
+the processes do, not how long it takes, and read the memory of a process the way
+its platform tells it: the resident set on Linux, the physical footprint on macOS,
+where the allocator keeps freed blocks resident and the resident set only grows.
+On the BSDs, whose allocators give memory back later, the bounds are twice as
+wide.
 
 ## Files
 
@@ -168,7 +178,7 @@ generated the same way each time.
 
 `.github/workflows/ci.yml` runs the suite on every push and pull request, with
 the fuzz targets for a minute each on pull requests, and the slow tests, the fuzz
-targets for five minutes each, and the privileged tests every night.
+targets for five minutes each, the soak and the privileged tests every night.
 
 | Host | x86-64 | arm64 |
 |---|---|---|
@@ -3048,3 +3058,240 @@ must fail for every mutant. Optional, and report-only until it is
 stable. (slow)
 
 Code: `s21_quality.py::t406`.
+
+---
+
+## XXIV. Documentation and source-level invariants
+
+**T-407 — The status tables of `docs.md` match `status.h`.**
+Every member of `proto_status_t` appears in the tables with the same
+value, and the tables list no code that does not exist.
+
+Code: `s22_docs.py::t407`.
+
+**T-408 — The list of `FAIL` reasons is complete.**
+**Fails today.** The appendix's list of `FAIL` reasons "emitted by the
+library" leaves out `server busy`, which `serve.c` sends. A script
+collects every `"FAIL ..."` literal in the sources and compares the two.
+
+Code: `s22_docs.py::t408`.
+
+**T-409 — Every public function and type is documented, and nothing else is.**
+Every function declared in a public header has a section and an
+entry in the table of contents of `docs.md`, and every section names a
+declared function. The fields each public type is documented with match
+the header: `proto_conn_t`, `proto_keys_t`, `proto_serve_opts_t`.
+
+Code: `s22_docs.py::t409`.
+
+**T-410 — "Returned by" names every function that returns the code.**
+**Fails today.** It is incomplete where codes travel up: `PROTO_E_NOMEM`
+names only `proto_seal`, though `proto_recv_line_dyn_status` returns it
+too; `PROTO_E_READ` and `PROTO_E_PEER_CLOSED` name only
+`proto_recv_line`, though the timed and the allocating readers,
+`proto_auth_client` and `proto_connect` return them; and the functions
+said to return a positive value leave out the length that
+`proto_recv_line_timeout` returns. A script that follows the calls keeps
+the columns true.
+
+Code: `s22_docs.py::t410`.
+
+**T-411 — No text predates the code it describes.**
+**Fails today.** The FAQ "`proto_connect` returns -1 — which step
+failed?" predates the status codes; the FAQ on
+`FAIL signature verification failed` blames a damaged `auth.key`, which
+`PROTO_E_KEY_MISMATCH` and `PROTO_E_KEY_SIZE` now stop at load time;
+`architecture.md` says `wire.c` is "~85 lines", and it has 273. A lint
+for "returns -1" and the like.
+
+Code: `s22_docs.py::t411`.
+
+**T-412 — The constants table matches the headers, and each option lives in one header.**
+The defaults in `protocol.h` and `wire.h` match the
+table. The timeouts are defined in `protocol.h`, and `READ_CHUNK` and
+`MAX_PAYLOAD` in `wire.h`, which depends on libc alone.
+
+Code: `s22_docs.py::t412`.
+
+**T-413 — Every C example compiles.**
+Every fenced C block in `README.md` and `docs.md` that is a whole
+program compiles (T-374, T-375); the fragments compile inside a function
+that declares their variables.
+
+Code: `s22_docs.py::t413`.
+
+**T-414 — The statements the probes contradict are corrected.**
+**Fails today.** The appendix on `\r` (T-055); `auth.c` on reading the
+reason for a refusal (T-226); a `FAIL` line "on every failure path"
+(T-246, T-247); `conn->fd` "left at -1" on failure (T-262); pipes as the
+stdin and stdout tunnel (T-050); `keygen` "creates nothing" (T-360).
+Each is fixed with its test.
+
+Code: `s22_docs.py::t414`.
+
+**T-415 — Every link and anchor resolves.**
+In every Markdown file, such as
+`docs.md#tool-keygen--generating-key-files`.
+
+Code: `s22_docs.py::t415`.
+
+**T-416 — Every measurement in the release notes names its test.**
+Each "Measured on macOS" sentence in `RELEASE_NOTES.md` names the test
+that now measures it on every run (the traceability table in the
+Summary).
+
+Code: `s22_docs.py::t416`.
+
+---
+
+## XXV. Load and soak
+
+**T-417 — 10000 sessions in a row leave the server flat.**
+The parent's fd count, child count and resident memory stay flat. (slow)
+
+Code: `s23_load.py::t417`.
+
+**T-418 — A flood of silent connections drains.**
+500 silent connections: the children peak at 500 at most and are all
+gone after `HANDSHAKE_TIMEOUT_MS`; a legitimate client is served during
+the flood, later perhaps, never refused. The connections are opened one
+after the other: opened all at once, the surplus of a queue of 16 is
+lost (T-320), and the kernel resets some of it (observed on macOS: 6 to
+16 of 500) or lets the client believe it is connected while the server
+never sees it (65 of 500 once). (slow)
+
+Code: `s23_load.py::t418`.
+
+**T-419 — A slow 16 MiB line costs bounded memory.**
+An authenticated client trickles a 16 MiB line over 60 s: the child's
+memory for the line stays under `MAX_PAYLOAD + 2`, and nothing in the
+library times it out, which is application policy (keepalive, or its own
+deadlines). (slow)
+
+Code: `s23_load.py::t419`.
+
+**T-420 — Throughput is reported.**
+Reading a 1 MiB line, compared with the 3 ms in `RELEASE_NOTES.md`, on
+the CI machine. Report only, since wall time is noisy; T-073 is the
+gate. (slow)
+
+Code: `s23_load.py::t420`.
+
+**T-421 — A burst past the process limit is refused, then served.**
+With `RLIMIT_NPROC` low, a burst of 200 connections: the excess gets
+`FAIL server busy`, and the server survives and serves again once
+children exit. (Linux, not as root, slow)
+
+Code: `s23_load.py::t421`.
+
+**T-422 — An hour of random sessions breaks nothing.**
+Fuzzed commands, random disconnects, stops and restarts against one
+server: no crash, no leaked child, no leaked descriptor. (slow)
+
+Code: `s23_load.py::t422`.
+
+**T-423 — The chunking recipe keeps memory flat.**
+200 MB sent as 50 messages of 4 MB, each sealed, read with
+`proto_recv_line_dyn` and opened: all identical. The server child's peak
+resident memory stays flat across the 50 messages, and under 3 times one
+line plus a baseline: the bound behind "2.75 x `MAX_PAYLOAD` per
+connection". (slow)
+
+Code: `s23_load.py::t423`.
+
+---
+
+## XXVI. Found by the fuzz targets
+
+**T-424 — A byte above 0x7F inside a key is `PROTO_E_KEY_FORMAT`.**
+**Fails today.** (found by the fuzz target of T-394) Where `char` is
+signed, `sodium_base642bin` takes every byte from 0x80 to 0xFF for a
+character of the alphabet (observed on macOS x86-64 with libsodium
+1.0.20: all 128 values were accepted). A key file with `\xD7` inside its
+44 characters loads as `PROTO_OK`, as a different key, and one that went
+wrong in the `auth.key` slot fails later as a mismatch instead of as
+base64. At either end of the line the byte is `PROTO_E_KEY_STRAY`, so
+only the inside is open. Expect `PROTO_E_KEY_FORMAT`: check every
+character against the alphabet (`is_b64_char` is already there) before
+decoding. The fuzz target skips such inputs until this is fixed. Where
+`char` is unsigned (Linux on arm64) the decoder takes no such byte, and
+the test skips.
+
+Code: `s24_found.py::t424`.
+
+**T-425 — A byte above 0x7F in place of a character of a sealed box opens nothing.**
+**Fails today.** (found by the fuzz target of T-398)
+The same decoder: in a sealed box, a byte above 0x7F is taken for a
+character, and for some values the character it stands for is the
+original one, so the altered box opens. Expect `NULL` for every such
+substitution: refuse a box with a byte above 0x7F before decoding. The
+test puts each of the 128 values in place of each of the first 24
+characters of a box. It picks a box where one of those characters is one
+that such a byte can stand for, about one in four, found by asking
+libsodium's decoder which characters the bytes are taken for; where the
+decoder takes none (`char` unsigned), the test skips.
+
+Code: `s24_found.py::t425`.
+
+---
+
+## Release notes traceability
+
+Every fix and feature `RELEASE_NOTES.md` describes for v1.1 and v1.2,
+under the bold lead its note starts with, and the tests that hold it.
+T-416 keeps the notes that quote a measurement tied to their tests.
+
+### v1.2 — Graceful server stop
+
+| Release note | Tests |
+|---|---|
+| Graceful stop | T-328, T-329, T-331, T-333, T-338, T-339, T-343, T-344 |
+| `proto_serve_stop()` | T-319, T-328, T-329, T-336, T-346 |
+| `drain_ms` | T-292, T-337 to T-342 |
+| Safe in a signal handler and on any thread. | T-301, T-322, T-328, T-329, T-330, T-334, T-335 |
+| A stop asked before `proto_serve` starts is kept. | T-331, T-332, T-333 |
+| The children are not told — yet. | T-343, T-344, T-345 |
+| Every way of failing to read a key file now says which it was, and none can hang the load. | T-032, T-145, T-147 to T-152, T-164 |
+| A key file whose line is not just the key says what is around it. | T-127 to T-144 |
+| A loaded key no longer leaves its text behind. | T-156 |
+| A failed `proto_load_keys` no longer hands back a secret key. | T-161 to T-164 |
+| `auth.pub` given as `enc.key` no longer loads. | T-162, T-168, T-169, T-170 |
+| `proto_seal` no longer kills the process over a length no message can have. | T-185, T-186, T-187 |
+| The trust model claimed more than the protocol gives. | T-384, T-385 |
+
+### v1.1 — Error codes, keepalive and fixes
+
+| Release note | Tests |
+|---|---|
+| `rc < 0` means failure, always. | T-031, T-032, T-407 |
+| The library stopped printing. | T-405 |
+| A documented pitfall is gone. | T-256, T-259, T-263, T-265, T-267 |
+| `bind` failures are classified. | T-297, T-298, T-300 |
+| EOF is distinguishable from an error. | T-064, T-066, T-096, T-108 |
+| A damaged key file says so where it is loaded. | T-161 |
+| Nothing is on by default. | T-122 |
+| The handshake needs no keepalive. | T-121, T-250, T-317 |
+| The platform difference lives in the library. | T-112 |
+| Not a read timeout. | T-076, T-112 |
+| The kernel handles both sides. | T-120, T-121 |
+| A struct, not a string, | T-292, T-295, T-326 |
+| Deployment options only. | T-002, T-003 |
+| No name resolution. | T-295, T-296, T-324 |
+| Out-of-bounds write in `proto_recv_line`. | T-062 |
+| Segfault on an unusable allowlist. | T-245, T-293 |
+| Two aborts became return values. | T-172, T-184 |
+| Silent line truncation. | T-059, T-079, T-099 |
+| Short writes reported as failures. | T-042, T-043 |
+| Signals aborted reads. | T-074, T-083, T-084 |
+| SIGPIPE killed clients. | T-044, T-045, T-046 |
+| Silent peers held server children forever. | T-246, T-248, T-250, T-317, T-418 |
+| `keygen` exposed secrets for an instant, and overwrote identities. | T-355, T-358, T-359, T-365, T-370 |
+| Only the first address of a host was ever tried. | T-266, T-268 |
+| Out-of-range ports were folded, or blamed on the hostname. | T-261, T-294 |
+| Reconnecting leaked the previous socket. | T-272, T-273 |
+| `accept` and `fork` failures were unhandled. | T-304 to T-308, T-353 |
+| Lines were read one byte per system call. | T-072, T-073, T-420 |
+| A line could be made to allocate without end. | T-098, T-099, T-101, T-105 |
+| A line that exactly filled the buffer was refused. | T-057, T-058, T-060 |
+| Connecting had no deadline. | T-267, T-269, T-270 |
+| Handlers could not see how the programs they ran ended. | T-348, T-352 |

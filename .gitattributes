@@ -1,0 +1,3 @@
+# The inputs of the fuzz targets are bytes, not text. A line ending in one has to reach the
+# library as it was written, whatever core.autocrlf says on the machine that commits it.
+testing/corpus/** -text

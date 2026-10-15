@@ -33,7 +33,7 @@ jobs:
   unix:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +62,7 @@ jobs:
         run: |
           flags="-v"
           case "${{ github.event_name }}" in
-            schedule) flags="$flags --slow --fuzz --fuzz-seconds 300" ;;
+            schedule) flags="$flags --slow --fuzz --fuzz-seconds 300 --soak-seconds 300" ;;
             pull_request) flags="$flags --fuzz --fuzz-seconds 60" ;;
           esac
           python3 testing/run.py $flags

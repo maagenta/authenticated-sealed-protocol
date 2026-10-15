@@ -42,6 +42,8 @@ def main(argv=None):
     ap.add_argument("--fuzz", action="store_true", help="include the fuzz targets")
     ap.add_argument("--fuzz-seconds", type=int, default=None,
                     help="time budget of each fuzz target (default 20; CI uses 60)")
+    ap.add_argument("--soak-seconds", type=int, default=None,
+                    help="how long the soak test T-422 runs (default 60; the nightly job uses 300)")
     ap.add_argument("-v", "--verbose", action="store_true", help="one line per test")
     ap.add_argument("--list", action="store_true", help="list the tests and exit")
     ap.add_argument("--check", action="store_true", help="check the registry against README.md")
@@ -56,6 +58,8 @@ def main(argv=None):
         shutil.rmtree(os.path.join(HERE, ".build"), ignore_errors=True)
     if args.fuzz_seconds is not None:
         os.environ["PROTO_FUZZ_SECONDS"] = str(args.fuzz_seconds)
+    if args.soak_seconds is not None:
+        os.environ["PROTO_SOAK_SECONDS"] = str(args.soak_seconds)
 
     load_sections()
 
