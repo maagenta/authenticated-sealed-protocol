@@ -225,6 +225,28 @@ load, so for them the check does nothing; the v1.2 comparison keeps
 covering the one swap it can tell. The format changes once, with the
 version that may add the server's keys anyway.
 
+## Tests — v2.0
+
+**What is missing.** Tests for the features above. Each is written with
+the feature it checks: a test cannot check a property that does not
+exist yet.
+
+**What changes for the v1.x tests.** Four things the library does today
+are gaps v2.0 closes on purpose. The v1.x tests that record them say so,
+and flip when their feature lands:
+
+- a relay in the middle ends up holding an authenticated session, until
+  the library authenticates the server (the channel above);
+- a box sealed to `enc_pk` by whoever holds it, the server included,
+  opens as a genuine entry, until entries are signed;
+- the client signs any 32 bytes it receives as a challenge, until the
+  handshake signature gets a context;
+- `enc.key` loads as `auth.pub`, and another identity's `auth.pub` as
+  `enc.key`, until key files carry labels.
+
+The key files go the other way: v1.x keeps loading the files v2.0's
+`keygen` writes, and its tests keep checking that it does.
+
 ## Other pending work
 
 - **Tests.** The structure and `test.h` are agreed; nothing is written.
