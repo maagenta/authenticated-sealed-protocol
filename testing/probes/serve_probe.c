@@ -87,9 +87,20 @@ static void put_num(long v) {
     put(b + i);
 }
 
+/* One write() for the whole line: the children handle the same signal at the
+ * same moment, and three writes each would interleave in the log. */
 static void on_term(int sig) {
     (void)sig;
-    put("term pid="); put_num(getpid()); put("\n");
+    char line[48] = "term pid=";
+    size_t n = strlen(line);
+    char digits[24];
+    int d = 0;
+    unsigned long v = (unsigned long)getpid();
+    do { digits[d++] = (char)('0' + v % 10); v /= 10; } while (v);
+    while (d) line[n++] = digits[--d];
+    line[n++] = '\n';
+    ssize_t w = write(logfd, line, n);
+    (void)w;
     proto_serve_stop();
 }
 
@@ -135,12 +146,19 @@ static int list_fds(char *out, size_t max) {
     return (int)n;
 }
 
+static void wait_eof(int fd);
+
 static void command_loop(int fd) {
     for (;;) {
         char *line = proto_recv_line_dyn(fd);
         if (!line) { logf("eof"); return; }
         logf("rx %.200s", line);
-        if (!strcmp(line, "QUIT")) { proto_send_line(fd, "BYE"); free(line); return; }
+        if (!strcmp(line, "QUIT")) {
+            proto_send_line(fd, "BYE");
+            free(line);
+            wait_eof(fd);                                /* the client closes after BYE */
+            return;
+        }
         else if (!strcmp(line, "PING")) proto_send_line(fd, "PONG");
         else if (!strncmp(line, "ECHO ", 5)) proto_send_prefixed(fd, "ECHO ", line + 5, strlen(line + 5));
         else if (!strncmp(line, "SLEEP ", 6)) { sleep_ms(atoi(line + 6)); proto_send_line(fd, "SLEPT"); }
@@ -344,6 +362,14 @@ int main(int argc, char **argv) {
     if (usr1) { sa.sa_handler = on_noop; sigaction(SIGUSR1, &sa, NULL); }
     if (usr2) { sa.sa_handler = dump_fds; sigaction(SIGUSR2, &sa, NULL); }
 
+    /* libsodium opens its source of randomness the first time it is asked for
+     * bytes, and keeps the descriptor: do it now, so that the baseline holds it
+     * and a handler that inherits it is not mistaken for one that leaks. */
+    proto_init();
+    {
+        unsigned char warm[8];
+        randombytes_buf(warm, sizeof warm);
+    }
     char l[1024];
     list_fds(l, sizeof l);
     logf("baseline_fds %s", l);

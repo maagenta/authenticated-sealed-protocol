@@ -10,7 +10,9 @@ import time
 import harness
 import lib
 import net
+import servers
 from harness import PIN, PLATFORM, case, check, eq, skip
+from keyfiles import make_identity
 
 INT_MAX = 2 ** 31 - 1
 
@@ -152,6 +154,15 @@ def t119():
     eq(knobs(c), (20, 6, 4), "the new values hold")
 
 
+def keepalive_of_fd(fd):
+    """SO_KEEPALIVE of a descriptor of this process."""
+    s = socket.socket(fileno=os.dup(fd))
+    try:
+        return s.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+    finally:
+        s.close()
+
+
 def run_ok(cmd):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).returncode == 0
 
@@ -188,3 +199,32 @@ def t120():
     took = net.ms_since(t0)
     eq(rc, -602, "a blocked proto_recv_line once the peer's packets are dropped")
     check(took < 8000, "keepalive took %.0f ms to notice" % took)
+
+
+@case("T-121")
+def t121():
+    """Where docs.md says to call it, it works."""
+    P = lib.proto()
+    ident = make_identity()
+    with servers.Server(ident.hex, "keepalive") as srv:
+        rc, keys = P.load_keys(ident.auth_key, ident.enc_key)
+        conn = lib.Conn.new(keys)
+        eq(P.connect(conn, "127.0.0.1", srv.port), 0, "proto_connect")
+        eq(P.keepalive(conn.fd, 10, 5, 3), 0, "proto_keepalive on conn.fd")
+        eq(servers.command(P, conn, "PING"), (4, b"PONG"), "the session carries on")
+        eq(srv.field("keepalive", "rc"), "0", "proto_keepalive on the handler's fd")
+        P.close(conn)
+
+
+@case("T-122")
+def t122():
+    """No keepalive unless asked."""
+    P = lib.proto()
+    ident = make_identity()
+    with servers.Server(ident.hex, "info") as srv:
+        rc, keys = P.load_keys(ident.auth_key, ident.enc_key)
+        conn = lib.Conn.new(keys)
+        eq(P.connect(conn, "127.0.0.1", srv.port), 0, "proto_connect")
+        eq(keepalive_of_fd(conn.fd), 0, "SO_KEEPALIVE on conn.fd")
+        eq(srv.field("info", "keepalive"), "0", "SO_KEEPALIVE on the handler's fd")
+        P.close(conn)

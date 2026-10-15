@@ -22,7 +22,7 @@ class Server(object):
 
     def __init__(self, allow, handler="ok", variant="fast", port=None, bind="127.0.0.1",
                  drain=None, ms=None, ctx=None, flags=(), group=False, stdout=None,
-                 wait=True, extra=()):
+                 wait=True, extra=(), preexec=None):
         self.allow = allow
         self.port = port or net.free_port()
         self.dir = harness.tmpdir("srv")
@@ -41,7 +41,7 @@ class Server(object):
         cmd += ["--sigterm-stop"] + list(flags) + list(extra)
         out = open(self.out_path, "wb") if stdout is None else stdout
         self.proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-                                     start_new_session=group)
+                                     start_new_session=group, preexec_fn=preexec)
         self.group = group
         self.pid = self.proc.pid
         self.exited = None
@@ -111,9 +111,33 @@ class Server(object):
         """Live processes whose parent is the server: [(pid, state)]."""
         return net.child_pids(self.pid)
 
+    def live_children(self):
+        """The children that are not zombies."""
+        return [c for c in self.children() if not c[1].startswith("Z")]
+
+    def dump_fds(self, timeout=5.0):
+        """Ask the server (SIGUSR2) for its open descriptors: [{'fd', 'cloexec', 'sock', 'local'}].
+
+        The server must have been started with --sigusr2-dump."""
+        time.sleep(0.2)                       # let a connection the server is still setting up settle
+        before = len(self.grep("dump end"))
+        os.kill(self.pid, signal.SIGUSR2)
+        self.wait_log("dump end", timeout, count=before + 1)
+        lines = self.log()
+        ends = [i for i, l in enumerate(lines) if l.startswith("dump end")]
+        start = ends[-2] + 1 if len(ends) > 1 else 0
+        rows = []
+        for l in lines[start:ends[-1]]:
+            if not l.startswith("fd="):
+                continue
+            row = dict(p.split("=", 1) for p in l.split() if "=" in p)
+            row["fd"], row["cloexec"], row["sock"] = int(row["fd"]), int(row["cloexec"]), int(row["sock"])
+            rows.append(row)
+        return rows
+
     # --------------------------------------------------------- control
 
-    def signal(self, sig):
+    def send_signal(self, sig):
         os.kill(self.pid, sig)
 
     def signal_group(self, sig):

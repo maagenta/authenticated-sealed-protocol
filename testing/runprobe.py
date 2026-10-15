@@ -12,6 +12,19 @@ WIRE_SEAMS = {"wire.c": ["-Dsend=seam_send", "-Drecv=count_recv", "-Dread=count_
                          "-Dmalloc=seam_malloc", "-Drealloc=seam_realloc", "-Dfree=seam_free"]}
 
 
+# The calls auth.c makes that seam_auth.c takes over, and the send that counts writes.
+AUTH_SEAMS = {
+    "auth.c": ["-Dgetaddrinfo=seam_getaddrinfo", "-Dfreeaddrinfo=seam_freeaddrinfo",
+               "-Dsocket=seam_socket", "-Dconnect=seam_connect", "-Dgetsockopt=seam_getsockopt",
+               "-Dclose=seam_close", "-Dstrdup=seam_strdup", "-Dmalloc=seam_malloc",
+               "-Dfree=seam_free"],
+    "wire.c": ["-Dsend=seam_send"],
+}
+
+# The calls serve.c makes that seam_serve.c takes over.
+SERVE_SEAMS = {"serve.c": ["-Dsocket=seam_socket", "-Dsocketpair=seam_socketpair", "-Dlisten=seam_listen",
+                           "-Daccept=seam_accept", "-Dfork=seam_fork", "-Dpoll=seam_poll"]}
+
 # The calls crypto.c makes that seam_crypto.c takes over.
 CRYPTO_SEAMS = {"crypto.c": ["-Dread=seam_read", "-Dopen=seam_open", "-Dmalloc=seam_malloc",
                              "-Dfree=seam_free", "-Dsodium_memzero=spy_memzero"]}

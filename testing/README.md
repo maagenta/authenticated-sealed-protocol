@@ -1054,6 +1054,18 @@ test: its socket closes, and the read sees end of stream at once.
 
 Code: `s08_keepalive.py::t120`.
 
+**T-121 — Where `docs.md` says to call it, it works.**
+On `conn.fd` after `proto_connect` and on the handler's fd, it returns
+`PROTO_OK` and the session carries on.
+
+Code: `s08_keepalive.py::t121`.
+
+**T-122 — No keepalive unless asked.**
+`SO_KEEPALIVE == 0` on `conn.fd` after `proto_connect`, and on the
+handler's fd under `proto_serve`.
+
+Code: `s08_keepalive.py::t122`.
+
 ---
 
 ## IX. Key files
@@ -1634,3 +1646,997 @@ Code: `s11_seal.py::t210`.
 inputs.
 
 Code: `s11_seal.py::t211`.
+
+---
+
+## XIV. `proto_auth_client`
+
+**T-212 — The client speaks first, with exactly `HELLO\n`.**
+The first bytes the scripted server reads are `HELLO\n`, and nothing
+else is sent before the challenge.
+
+Code: `s12_auth_client.py::t212`.
+
+**T-213 — The `AUTH` line has the documented shape.**
+`AUTH `, 44 characters, a space and 88 characters: 138 in all. The key
+decodes to `keys->auth_pk`, and the signature verifies over the 32
+decoded challenge bytes, not over their base64.
+
+Code: `s12_auth_client.py::t213`.
+
+**T-214 — `OK` is `PROTO_OK`.**
+`OK` and `OK\r`. (observed)
+
+Code: `s12_auth_client.py::t214`.
+
+**T-215 — `REGISTER` is `PROTO_REGISTER_REQUESTED`.**
+`REGISTER` and `REGISTER\r` (observed). The client does not take it for
+`OK`.
+
+Code: `s12_auth_client.py::t215`.
+
+**T-216 — Anything else after `AUTH` is `PROTO_E_REJECTED`.**
+`FAIL access denied`, `OK ` with a trailing space, `BYE` (all observed),
+and an empty line.
+
+Code: `s12_auth_client.py::t216`.
+
+**T-217 — A `FAIL` in place of the challenge is `PROTO_E_REJECTED`.**
+`FAIL server busy`, `FAIL internal error`, and `FAIL ` (observed for
+`FAIL `).
+
+Code: `s12_auth_client.py::t217`.
+
+**T-218 — A bare `FAIL` in place of the challenge is `PROTO_E_UNEXPECTED_REPLY`.**
+**Pin.** (observed) After `AUTH`, the same
+line is `PROTO_E_REJECTED`. Decide whether `FAIL` without a reason is a
+refusal.
+
+Code: `s12_auth_client.py::t218`.
+
+**T-219 — A reply that is neither `CHALLENGE` nor `FAIL` is `PROTO_E_UNEXPECTED_REPLY`.**
+`CHALLENGE` without its space, a lowercase
+`challenge x`, an empty line (observed), and `HI`.
+
+Code: `s12_auth_client.py::t219`.
+
+**T-220 — A malformed challenge is `PROTO_E_BAD_CHALLENGE`.**
+Two spaces after `CHALLENGE` (observed), text that is not base64, 31
+bytes, 33 bytes, a trailing space, missing padding, URL-safe characters.
+A challenge shorter than 32 bytes, such as `CHALLENGE AA==`, is never
+signed.
+
+Code: `s12_auth_client.py::t220`.
+
+**T-221 — The client signs any well-formed 32 bytes.**
+**Pin.** An all-zero challenge included (observed: it answered with
+`AUTH`). This is the behaviour behind the relay attack in `TODO.md`; the
+test flips when v2.0 binds the signature to a context.
+
+Code: `s12_auth_client.py::t221`.
+
+**T-222 — Silence after `HELLO` is `PROTO_E_TIMEOUT`.**
+After `HANDSHAKE_TIMEOUT_MS`, 300 ms in the fast build.
+
+Code: `s12_auth_client.py::t222`.
+
+**T-223 — Silence after `AUTH` is `PROTO_E_TIMEOUT`.**
+The same deadline bounds every handshake read.
+
+Code: `s12_auth_client.py::t223`.
+
+**T-224 — A server that closes mid-handshake is `PROTO_E_PEER_CLOSED`.**
+After `HELLO`, or after `AUTH`.
+
+Code: `s12_auth_client.py::t224`.
+
+**T-225 — A challenge line of 16384 characters or more is `PROTO_E_LINE_TOO_LONG`.**
+The handshake reads into `char[MAX_LINE]`.
+
+Code: `s12_auth_client.py::t225`.
+
+**T-226 — The reason for a refusal can be read.**
+**Fails today.** After `PROTO_E_REJECTED`, the `FAIL` line has been
+consumed, and the next read times out (observed). `auth.c` says the
+caller "can read [it] off the wire if it wants it", and the FAQ suggests
+looking at which `FAIL` the server sends. Expect the reason to be
+reachable (an out-parameter, a field in `proto_conn_t`), or the comment
+corrected.
+
+Code: `s12_auth_client.py::t226`.
+
+**T-227 — A server that trickles bytes cannot hold the client past the deadline.**
+One byte every 50 ms: `PROTO_E_TIMEOUT` at the deadline of
+the line.
+
+Code: `s12_auth_client.py::t227`.
+
+**T-228 — A `FAIL` sent before `HELLO` is read gives one code or the other.**
+**Pin.** A server that writes its `FAIL` and closes before
+reading `HELLO`, as `proto_auth_server` does with an unusable allowlist
+in a custom accept loop: the client reported `PROTO_E_REJECTED` in 18
+runs out of 20 and `PROTO_E_WRITE` in 2 (observed), because `HELLO`
+could not be sent and the `FAIL` already in the socket was never read.
+Until this is decided the test accepts either code and records which;
+afterwards it requires the decided one in 100 runs out of 100. Decide:
+when `HELLO` cannot be sent, try to read a pending line.
+
+Code: `s12_auth_client.py::t228`.
+
+**T-229 — `keys == NULL` crashes after `HELLO` has gone out.**
+**Pin.** Nothing checks it. Decided together with T-051.
+
+Code: `s12_auth_client.py::t229`.
+
+**T-230 — No secret crosses the wire.**
+Capture every byte a client sends in a session with registration.
+Neither `auth_sk`, its 32-byte seed, nor `enc_sk` appears, raw, in
+base64 (standard or URL-safe) or in hex of either case. `enc_pk` appears
+once, in the `REGISTER` line, and never when no registration was asked
+for; `auth_pk` only in `AUTH`.
+
+Code: `s12_auth_client.py::t230`.
+
+---
+
+## XV. `proto_auth_server`
+
+**T-231 — A valid handshake returns the identity, on the heap.**
+A string equal to `allowed_hex`, at another address, which the caller
+frees with no LSan report.
+
+Code: `s13_auth_server.py::t231`.
+
+**T-232 — On success the server writes nothing after `CHALLENGE`.**
+The `OK` or `REGISTER` verdict belongs to the handler, as in the
+recipes. A handler that never writes leaves `proto_connect` to fail with
+`PROTO_E_TIMEOUT`; test that, so the contract is written down somewhere.
+
+Code: `s13_auth_server.py::t232`.
+
+**T-233 — Every session gets a fresh challenge.**
+`CHALLENGE ` and 44 characters that decode to 32 bytes: a line of 54
+characters (observed). 100 sessions through `proto_serve`, each in a
+fresh fork, give 100 different challenges: the random generator survives
+`fork()`.
+
+Code: `s13_auth_server.py::t233`.
+
+**T-234 — A captured `AUTH` line cannot be replayed.**
+An `AUTH` line captured in one session and replayed in another gets
+`FAIL signature verification failed`. (observed) The property the
+challenge exists to provide.
+
+Code: `s13_auth_server.py::t234`.
+
+**T-235 — A valid signature by a key that is not allowlisted is refused.**
+`FAIL access denied`, and `NULL`.
+
+Code: `s13_auth_server.py::t235`.
+
+**T-236 — Anything but exactly `HELLO` is refused.**
+`hello`, `HELLO `, `HELLO x` and an empty line get
+`FAIL expected HELLO`: the check is `strcmp`, not a prefix.
+
+Code: `s13_auth_server.py::t236`.
+
+**T-237 — `HELLO\0junk` is taken for `HELLO`.**
+**Pin.** (observed: the challenge follows) Decided together with T-056.
+
+Code: `s13_auth_server.py::t237`.
+
+**T-238 — A line that does not begin with `AUTH ` is refused.**
+`FAIL expected AUTH` (observed for `auth ...`), a second `HELLO`
+included.
+
+Code: `s13_auth_server.py::t238`.
+
+**T-239 — An `AUTH` line without its two fields is refused.**
+One field only, or the two fields separated by a tab:
+`FAIL invalid AUTH format` (observed for the tab).
+
+Code: `s13_auth_server.py::t239`.
+
+**T-240 — The spacing of `AUTH` is lenient.**
+**Pin.** Extra spaces before, between and after the fields, and a third
+field, are all accepted (observed: `OK` for `AUTH pk sig extra junk`,
+`AUTH   pk    sig`, `AUTH pk sig ` and `AUTH  pk sig`). The appendix
+says "fields separated by single spaces", and the key-file reader
+refuses the same looseness. Decide: strict, or documented as lenient.
+
+Code: `s13_auth_server.py::t240`.
+
+**T-241 — A bad public key is refused.**
+Not base64, URL-safe characters (`-`, `_`), or 31 or 33 bytes:
+`FAIL invalid public key`.
+
+Code: `s13_auth_server.py::t241`.
+
+**T-242 — A bad signature is refused.**
+Not base64, or 63 or 65 bytes: `FAIL invalid signature`.
+
+Code: `s13_auth_server.py::t242`.
+
+**T-243 — A signature over anything but this challenge is refused.**
+Over another challenge, or over the challenge's base64 text:
+`FAIL signature verification failed`.
+
+Code: `s13_auth_server.py::t243`.
+
+**T-244 — An all-zero key with an all-zero signature is refused.**
+`FAIL signature verification failed`.
+
+Code: `s13_auth_server.py::t244`.
+
+**T-245 — An unusable allowlist is refused before anything is read.**
+`NULL`, 63 and 65 characters, uppercase, a `g`, a NUL at position 32:
+`FAIL internal error`, then `NULL`. The v1.1 fix for the segfault on an
+unusable allowlist.
+
+Code: `s13_auth_server.py::t245`.
+
+**T-246 — A client that says nothing is sent a `FAIL`.**
+**Fails today.** After `HANDSHAKE_TIMEOUT_MS` the child returns `NULL`
+and the client sees end of stream, with no `FAIL` (observed); the same
+after `CHALLENGE`. `docs.md` says "On every failure path a descriptive
+`FAIL <reason>` line has already been sent", and `auth.h` says the same.
+Decide: send `FAIL timeout`, or narrow the promise to protocol errors.
+
+Code: `s13_auth_server.py::t246`.
+
+**T-247 — An oversized `HELLO` or `AUTH` is answered with a `FAIL`.**
+**Fails today.** A line of 16384 characters or more gives `NULL` and no
+`FAIL`; and since the rest of the line is unread when the child closes,
+the client gets a reset (observed `PROTO_E_READ`). The server allocates
+nothing for it: the bound is `MAX_LINE`. Same decision as T-246; reading
+on, within a bound, before closing is how the busy path avoids the same
+reset.
+
+Code: `s13_auth_server.py::t247`.
+
+**T-248 — A client that leaves mid-handshake ends the child at once.**
+A client that closes after `HELLO`: `NULL` at once.
+
+Code: `s13_auth_server.py::t248`.
+
+**T-249 — Nothing echoes the client, and every `FAIL` is the last line.**
+Every line the server sends during the handshake is `CHALLENGE` with 44
+characters, or `FAIL ` with one of the documented reasons, a property
+also checked over the fuzz corpus (T-396). End of stream follows every
+`FAIL`.
+
+Code: `s13_auth_server.py::t249`.
+
+**T-250 — A client that trickles bytes cannot keep the child past the deadline.**
+`HANDSHAKE_TIMEOUT_MS` bounds each line, however slowly it
+arrives.
+
+Code: `s13_auth_server.py::t250`.
+
+**T-251 — The identity is compared exactly.**
+A key whose hex differs from the allowlist in its last digit gets
+`FAIL access denied`.
+
+Code: `s13_auth_server.py::t251`.
+
+**T-252 — An allocation failure is answered with `FAIL internal error`.**
+`strdup` or `malloc` failing: `FAIL internal error`, `NULL`, no leak.
+(seam)
+
+Code: `s13_auth_server.py::t252`.
+
+**T-253 — The two halves of the library agree.**
+`proto_auth_client` on one end of a socketpair and `proto_auth_server`
+on the other, in two threads, with the server side then sending `OK` as
+a handler would: the server returns the client's identity and the client
+returns `PROTO_OK`. No network and no fork: the fastest check that a
+change to one side did not break the other. It runs in the TSan job too
+(T-392).
+
+Code: `s13_auth_server.py::t253`.
+
+---
+
+## XVI. `proto_connect`
+
+**T-254 — A full connection is `PROTO_OK` and fills the conn.**
+Against `proto_serve` on `127.0.0.1` with a handler that sends `OK`:
+`PROTO_OK`, `fd >= 0`, `identity_hex == hex(keys.auth_pk)`, and the
+socket blocking again (observed: `O_NONBLOCK` clear).
+
+Code: `s14_connect.py::t254`.
+
+**T-255 — Registration is answered automatically.**
+The handler sends `REGISTER`, reads `REGISTER <b64>` and answers `OK`:
+`PROTO_OK`, not `PROTO_REGISTER_REQUESTED`. The line is exactly
+`REGISTER ` and 44 characters, decoding to `keys.enc_pk`. The
+application never sends it itself.
+
+Code: `s14_connect.py::t255`.
+
+**T-256 — A refused registration is `PROTO_E_REGISTER_REJECTED`.**
+`FAIL no` after `REGISTER`: `PROTO_E_REGISTER_REJECTED`, `fd == -1`, and
+the server sees the connection close.
+
+Code: `s14_connect.py::t256`.
+
+**T-257 — Only `OK` completes a registration.**
+`OK\r` gives `PROTO_OK`; `OK extra` gives `PROTO_E_REGISTER_REJECTED`.
+
+Code: `s14_connect.py::t257`.
+
+**T-258 — Silence after `REGISTER` is `PROTO_E_TIMEOUT`.**
+With `fd == -1`.
+
+Code: `s14_connect.py::t258`.
+
+**T-259 — An identity that is not allowlisted is `PROTO_E_REJECTED`.**
+With `fd == -1` (observed): "access denied", told apart from "network
+down".
+
+Code: `s14_connect.py::t259`.
+
+**T-260 — `identity_hex` is filled even when the handshake fails.**
+**Pin.** (observed) `docs.md` lists it as the step after the handshake.
+
+Code: `s14_connect.py::t260`.
+
+**T-261 — An out-of-range port is `PROTO_E_BAD_PORT`, before any resolution.**
+Ports 0, -1, 65536, 70000, `INT_MIN` and `INT_MAX`:
+`PROTO_E_BAD_PORT`, and a `getaddrinfo` seam records no call. 70000 is
+not folded to 4464. (seam)
+
+Code: `s14_connect.py::t261`.
+
+**T-262 — `PROTO_E_BAD_PORT` on a connected conn closes the old connection.**
+**Fails today.** On a conn that holds a live connection,
+the bad port leaves the connection open and `conn->fd` unchanged
+(observed: still usable), while `docs.md` says "On failure `conn->fd` is
+left at `-1` and the socket is closed". A later failure does close it
+first (`PROTO_E_RESOLVE`, observed). Decide which behaviour the
+documents describe.
+
+Code: `s14_connect.py::t262`.
+
+**T-263 — A name that does not resolve is `PROTO_E_RESOLVE`.**
+`nonexistent.invalid`.
+
+Code: `s14_connect.py::t263`.
+
+**T-264 — `host == NULL` connects to the loopback.**
+**Pin.** `proto_connect(&c, NULL, port)` reaches a local server and
+returns `PROTO_OK` (observed): `getaddrinfo(NULL, ...)` without
+`AI_PASSIVE` means the loopback. On macOS `host == ""` does the same
+(observed); glibc likely answers `""` with `EAI_NONAME` (reasoned).
+Decide: `PROTO_E_PARAM` for both.
+
+Code: `s14_connect.py::t264`.
+
+**T-265 — A closed port is `PROTO_E_CONNECT`, at once.**
+On 127.0.0.1 (observed: 0 ms). No `TIME_WAIT` is needed: a closed port
+refuses.
+
+Code: `s14_connect.py::t265`.
+
+**T-266 — Every address of a host is tried.**
+`localhost` reaches a server that listens only on 127.0.0.1, even where
+`::1` is listed first (observed `PROTO_OK`). The v1.1 fix: only the
+first address used to be tried.
+
+Code: `s14_connect.py::t266`.
+
+**T-267 — Silence is `PROTO_E_CONNECT_TIMEOUT` after `CONNECT_TIMEOUT_MS`.**
+500 ms in the fast build, for an address whose SYNs are dropped (see
+*Silence* in the conventions). A full accept queue does not do it on
+macOS: the connection completes and the handshake times out instead
+(observed `PROTO_E_TIMEOUT`). The v1.1 fix: connecting had no deadline.
+(Linux)
+
+Code: `s14_connect.py::t267`.
+
+**T-268 — The address walk ranks the outcomes.**
+With a `getaddrinfo` seam that returns a crafted list: [refusing, good]
+gives `PROTO_OK`; [silent, good] gives `PROTO_OK` after about
+`CONNECT_TIMEOUT_MS`; [silent, refusing] gives `PROTO_E_CONNECT`, since
+a refusal outweighs silence; [silent, silent] gives
+`PROTO_E_CONNECT_TIMEOUT` after about twice `CONNECT_TIMEOUT_MS`, since
+the deadline is per address; [a family this host lacks, refusing] gives
+`PROTO_E_CONNECT`; [a family this host lacks] alone gives
+`PROTO_E_SOCKET`. A `socket` seam that fails for every family gives
+`PROTO_E_SOCKET` as well. (seam)
+
+Code: `s14_connect.py::t268`.
+
+**T-269 — An interrupted `connect()` is waited for.**
+`EINTR` from `connect()` is treated as `EINPROGRESS`: `PROTO_OK`. (seam)
+
+Code: `s14_connect.py::t269`.
+
+**T-270 — The kernel giving up first counts as silence.**
+`SO_ERROR` equal to `ETIMEDOUT`: `PROTO_E_CONNECT_TIMEOUT`, not
+`PROTO_E_CONNECT`. (seam)
+
+Code: `s14_connect.py::t270`.
+
+**T-271 — No descriptor leaks on failure.**
+The count of open fds is unchanged after `PROTO_E_RESOLVE`,
+`PROTO_E_CONNECT`, `PROTO_E_CONNECT_TIMEOUT`, `PROTO_E_SOCKET`,
+`PROTO_E_REJECTED`, `PROTO_E_TIMEOUT` and `PROTO_E_REGISTER_REJECTED`,
+and `conn->fd == -1` after each.
+
+Code: `s14_connect.py::t271`.
+
+**T-272 — Reconnecting on a live conn closes the old connection.**
+The old socket receives `QUIT` and is closed, so its server child sees
+`QUIT` and then end of stream, and the new socket works. 100 reconnects
+leave the client's fd count and the server's child count flat: the v1.1
+leak stays fixed.
+
+Code: `s14_connect.py::t272`.
+
+**T-273 — Reconnecting after the old connection died works.**
+After a read returned `PROTO_E_PEER_CLOSED`, `proto_connect` again:
+`PROTO_OK`, no `SIGPIPE`, and no `proto_close` needed first.
+
+Code: `s14_connect.py::t273`.
+
+**T-274 — A descriptor that is not a socket is left alone.**
+A `{0}` conn with an ordinary stdin (a terminal, a file, a pipe):
+`PROTO_OK`, and stdin is still open and unchanged. Any descriptor that
+is not a socket is treated the same way: a pipe at fd 5 in `conn->fd`
+stays open and is replaced.
+
+Code: `s14_connect.py::t274`.
+
+**T-275 — A `{0}` conn closes stdin when stdin is a socket.**
+**Pin.** That socket receives `QUIT` and is closed, and the new
+connection takes fd 0 (observed). The documented blind spot; the test
+makes any change to it deliberate.
+
+Code: `s14_connect.py::t275`.
+
+**T-276 — A stale `conn->fd` that now holds an application's socket is closed.**
+**Pin.** `QUIT` is written into it, and it is closed: the
+documented precondition, "`-1` or a socket this library opened", in
+executable form.
+
+Code: `s14_connect.py::t276`.
+
+**T-277 — The connection is close-on-exec.**
+**Fails today.** `FD_CLOEXEC` is clear (observed), so a client that runs
+another program (an editor, a helper, `system()`) hands it an
+authenticated session. Fix: `SOCK_CLOEXEC`, or `fcntl` right after
+`socket()`.
+
+Code: `s14_connect.py::t277`.
+
+**T-278 — Keys that were never loaded are not checked.**
+**Pin.** An all-zero `conn.keys` gives `PROTO_E_REJECTED` after a whole
+handshake (observed), not `PROTO_E_PARAM`. A server that asked for
+registration would be sent an all-zero, low-order `enc_pk` that nobody
+can seal to (T-188). Decide whether `proto_connect` checks.
+
+Code: `s14_connect.py::t278`.
+
+**T-279 — The client's signal dispositions are unchanged.**
+`SIGPIPE` and `SIGCHLD` are as before after connecting, failing and
+closing.
+
+Code: `s14_connect.py::t279`.
+
+**T-280 — `conn == NULL` crashes for a valid port.**
+**Pin.** For an invalid one, `PROTO_E_BAD_PORT` comes first. Decided
+together with T-051.
+
+Code: `s14_connect.py::t280`.
+
+**T-281 — The IPv6 path connects.**
+Against a test peer that listens on `::1` and runs `proto_auth_server`
+and an `OK`, `proto_connect(&c, "::1", port)` returns `PROTO_OK`.
+`proto_serve` is IPv4 only, so this is the one place the client's IPv6
+code runs to success. (IPv6)
+
+Code: `s14_connect.py::t281`.
+
+---
+
+## XVII. `proto_close`
+
+**T-282 — `proto_close` says `QUIT`, waits for one line, and closes.**
+It writes `QUIT\n`, reads one line, closes, and sets `fd = -1`; the
+server child sees `QUIT`, then end of stream. With a server that answers
+`BYE`, the wire reads `QUIT`, `BYE`, end of stream.
+
+Code: `s15_close.py::t282`.
+
+**T-283 — A server that never answers costs `QUIT_TIMEOUT_MS`, no more.**
+The call returns after `QUIT_TIMEOUT_MS` (observed: 201 ms for 200),
+with `fd == -1`.
+
+Code: `s15_close.py::t283`.
+
+**T-284 — A dead peer costs no wait.**
+The call returns at once and without `SIGPIPE`, whether the `QUIT` fails
+or still goes out, as it usually does: the wait then ends on end of
+stream or a reset.
+
+Code: `s15_close.py::t284`.
+
+**T-285 — A second call does nothing.**
+It writes nothing and closes nothing. (observed)
+
+Code: `s15_close.py::t285`.
+
+**T-286 — `fd == -1` returns without a system call.**
+Seams on `send` and `close` record no call. (seam)
+
+Code: `s15_close.py::t286`.
+
+**T-287 — `fd == 0` that is not a socket is left open.**
+A `{0}` conn with stdin a terminal or a pipe: nothing written, nothing
+closed, and `fd == -1` afterwards. The v1.1 fix.
+
+Code: `s15_close.py::t287`.
+
+**T-288 — `QUIT_TIMEOUT_MS=0` does not wait.**
+In a `-DQUIT_TIMEOUT_MS=0` build, `proto_close` on a silent server
+returns at once. It relies on T-086.
+
+Code: `s15_close.py::t288`.
+
+**T-289 — A long answer in place of `BYE` does not hold the close.**
+An answer longer than 63 characters: the call returns at once, with
+`fd == -1`.
+
+Code: `s15_close.py::t289`.
+
+**T-290 — `proto_close(NULL)` is a no-op.**
+**Fails today.** It dies of `SIGSEGV` (observed). Cleanup code is where
+a `NULL` is most likely. Decided together with T-051.
+
+Code: `s15_close.py::t290`.
+
+**T-291 — An unread reply is taken for the goodbye.**
+**Pin.** With an application reply still unread, `proto_close` takes
+that line for the goodbye and closes at once, leaving `BYE` unread.
+Record whether the server child then sees a reset rather than end of
+stream.
+
+Code: `s15_close.py::t291`.
+
+---
+
+## XVIII. `proto_serve`
+
+**T-292 — Arguments are checked in order, before any socket exists.**
+The fd count is unchanged and the port still free after each: a `NULL`
+allowlist, a `NULL` handler and port 0 give `PROTO_E_NO_ALLOWLIST`
+(observed); a bad allowlist and a `NULL` handler,
+`PROTO_E_BAD_ALLOWLIST`; a `NULL` handler and port 0,
+`PROTO_E_NO_HANDLER`; port 0 and a bad address, `PROTO_E_BAD_PORT`; a
+bad address and a negative `drain_ms`, `PROTO_E_BAD_ADDRESS` (observed);
+a negative `drain_ms` alone, `PROTO_E_PARAM`.
+
+Code: `s16_serve.py::t292`.
+
+**T-293 — An allowlist that is not 64 lowercase hex characters is refused.**
+`PROTO_E_BAD_ALLOWLIST` for uppercase (observed), 63 and 65 characters
+(observed for 65), a letter that is not hex (`g`), and a NUL at
+position 32.
+
+Code: `s16_serve.py::t293`.
+
+**T-294 — An out-of-range port is refused.**
+Ports 0, -1, 65536 and 70000: `PROTO_E_BAD_PORT`. 70000 is not folded to
+4464, and 0 does not ask the kernel for a port.
+
+Code: `s16_serve.py::t294`.
+
+**T-295 — `bind_addr` must be an IPv4 literal.**
+`127.0.0.1` and `0.0.0.0` start (observed); `127.1`, ` 127.0.0.1`,
+`127.0.0.1 `, `::1`, `""` and `localhost` give `PROTO_E_BAD_ADDRESS`
+(observed). No name is resolved.
+
+Code: `s16_serve.py::t295`.
+
+**T-296 — Leading zeros in `bind_addr` get one verdict per platform.**
+**Pin.** `127.000.000.001` starts on macOS, whose `inet_pton` accepts
+leading zeros (observed), while the `inet_pton` of glibc and of musl
+refuse them (reasoned from their sources): `PROTO_E_BAD_ADDRESS` on
+Linux. One configuration, two verdicts. Decide: take the platform's
+answer, or parse strictly in the library.
+
+Code: `s16_serve.py::t296`.
+
+**T-297 — An address this host does not have is `PROTO_E_BIND`.**
+`192.0.2.1` gives `PROTO_E_BIND` (observed). Record `255.255.255.255`
+per platform: `PROTO_E_BIND` on macOS (observed), while Linux accepts a
+broadcast address in a TCP `bind` (reasoned from `inet_bind`), so the
+server would start where no client can reach it.
+
+Code: `s16_serve.py::t297`.
+
+**T-298 — A port held by another listener is `PROTO_E_PORT_IN_USE`.**
+Both on the wildcard address. (observed)
+
+Code: `s16_serve.py::t298`.
+
+**T-299 — A second server on the same port is refused, whatever the two bind addresses.**
+**Fails today.** Wildcard then `127.0.0.1`, and
+`127.0.0.1` then wildcard, both leave the second one running (observed).
+"A forgotten instance still holding the port" then goes undiagnosed, and
+loopback clients reach the newer instance. Linux refuses both
+(reasoned). Expect `PROTO_E_PORT_IN_USE` on every platform;
+`SO_REUSEADDR` allows more on BSD-derived kernels than on Linux. (macOS)
+
+Code: `s16_serve.py::t299`.
+
+**T-300 — A privileged port without privilege is `PROTO_E_PERM_DENIED`.**
+A port below `net.ipv4.ip_unprivileged_port_start`. Not on macOS, where
+uid 501 binds port 80 (observed), nor in the many containers that allow
+it. (Linux, not as root)
+
+Code: `s16_serve.py::t300`.
+
+**T-301 — A failed `socketpair()` is `PROTO_E_SOCKET`, and the port is free.**
+The stop channel cannot be made: `PROTO_E_SOCKET`, and the port
+can be bound again at once. (observed) (seam)
+
+Code: `s16_serve.py::t301`.
+
+**T-302 — A failed `socket()` is `PROTO_E_SOCKET`.**
+The listener cannot be created. (seam)
+
+Code: `s16_serve.py::t302`.
+
+**T-303 — A failed `listen()` is `PROTO_E_LISTEN`, and the port is released.**
+The port can be bound again at once. (seam)
+
+Code: `s16_serve.py::t303`.
+
+**T-304 — A broken listening socket is `PROTO_E_ACCEPT`.**
+`accept()` failing with `EBADF` or `EINVAL` (observed for `EBADF`): the
+server returns instead of looping forever. (seam)
+
+Code: `s16_serve.py::t304`.
+
+**T-305 — Running out of descriptors pauses `accept`, without a busy loop.**
+`accept()` failing with `EMFILE`, `ENFILE`, `ENOBUFS` or `ENOMEM` is
+retried about every 100 ms (observed: 10 calls in 1.2 s), and a stop
+still ends it (observed). A real descriptor limit is no way to reach
+this: with a limit of 4, `socketpair` fails before `accept` is reached,
+since stdio, the listener and the pair need six. (seam)
+
+Code: `s16_serve.py::t305`.
+
+**T-306 — `EINTR` and `ECONNABORTED` from `accept` are retried at once.**
+The next client is served. (seam)
+
+Code: `s16_serve.py::t306`.
+
+**T-307 — A failed `fork()` is answered with `FAIL server busy`.**
+The client's `proto_connect` returns `PROTO_E_REJECTED` (observed, in 1
+ms); a client that sends nothing still gets the line within about 100 ms
+(observed). The connection is then closed and the server keeps going.
+(seam)
+
+Code: `s16_serve.py::t307`.
+
+**T-308 — A real process shortage gets the same answer.**
+`RLIMIT_NPROC` set to the current number of processes: the next client
+gets `FAIL server busy`. Root ignores the limit, hence the tag. (Linux,
+not as root)
+
+Code: `s16_serve.py::t308`.
+
+**T-309 — A failing `poll()` is retried after a pause.**
+Any error other than `EINTR`: retried, not in a busy loop. (seam)
+
+Code: `s16_serve.py::t309`.
+
+**T-310 — The handler gets the connection, the identity and `ctx`, in a child.**
+It receives the connected fd, an `identity_hex` equal to the
+allowlist, and `ctx` unchanged. It runs in another process (`getpid()`
+differs from the parent's), and its fd is a connected, blocking socket
+(`getpeername` succeeds, `O_NONBLOCK` clear). A listener made
+non-blocking later would hand handlers non-blocking sockets on macOS and
+the BSDs, where accepted sockets inherit the flag.
+
+Code: `s16_serve.py::t310`.
+
+**T-311 — Nothing runs for a stranger.**
+A handler that writes a marker file is never called for a refused or a
+silent client.
+
+Code: `s16_serve.py::t311`.
+
+**T-312 — `ctx` points to the child's copy.**
+A change made through it in one connection is seen neither by the parent
+nor by the next connection.
+
+Code: `s16_serve.py::t312`.
+
+**T-313 — When the handler returns, the child closes, exits 0 and is reaped.**
+The client sees end of stream; no zombie after 50 sessions.
+
+Code: `s16_serve.py::t313`.
+
+**T-314 — A handler that crashes costs its own connection only.**
+`raise(SIGSEGV)` in the handler: the next client is served.
+
+Code: `s16_serve.py::t314`.
+
+**T-315 — Clients are served in parallel.**
+20 clients whose handlers each sleep 200 ms finish in about 200 ms, not
+4 s.
+
+Code: `s16_serve.py::t315`.
+
+**T-316 — The parent keeps nothing per connection.**
+Its fd count is the same after 200 sessions.
+
+Code: `s16_serve.py::t316`.
+
+**T-317 — A silent stranger costs a child for `HANDSHAKE_TIMEOUT_MS` only.**
+After 10 silent connections, and the timeout plus some slack, none of
+their children is alive. The v1.1 fix for children held forever by
+silent peers.
+
+Code: `s16_serve.py::t317`.
+
+**T-318 — What a handler prints reaches its destination.**
+**Fails today.** What a handler writes through stdio and does not flush
+is lost, because the child ends with `_exit`, which discards buffers
+(observed: a `printf` in the handler, stdout redirected to a file, and
+the file stays empty). `_exit` is right, since the child inherits the
+parent's unflushed buffers. Expect either the documents to tell handlers
+to `fflush`, or the parent to flush before `fork()` and the child to
+call `fflush(NULL)` after the handler.
+
+Code: `s16_serve.py::t318`.
+
+**T-319 — A stopped server can start again on the same port at once.**
+`SO_REUSEADDR`: a server stopped while its connections linger in
+`TIME_WAIT` starts again on the same port without `PROTO_E_PORT_IN_USE`.
+
+Code: `s16_serve.py::t319`.
+
+**T-320 — A burst beyond the backlog is served.**
+50 connections against the backlog of 16: every client completes the
+handshake, since the kernel retries; none is refused. (slow)
+
+Code: `s16_serve.py::t320`.
+
+**T-321 — A client that resets before `accept` does not wedge the loop.**
+An `accept` seam sleeps 300 ms while the client closes with
+`SO_LINGER {1, 0}`; a stop asked during the sleep is honoured (observed
+on macOS: returned at 361 ms). A guard for kernels that drop aborted
+connections from the queue, where a blocking `accept()` would wait for
+the next client. (seam)
+
+Code: `s16_serve.py::t321`.
+
+**T-322 — `proto_serve` keeps two descriptors, once.**
+After `proto_serve` returns, the process holds two descriptors more than
+before its first call, the stop channel, and none more after later
+calls.
+
+Code: `s16_serve.py::t322`.
+
+**T-323 — The listening socket and the stop channel are close-on-exec.**
+**Fails today.** None of the three sockets had `FD_CLOEXEC` while
+serving (observed), so a program the parent runs inherits the port and
+the channel. Expect `FD_CLOEXEC` on all three.
+
+Code: `s16_serve.py::t323`.
+
+**T-324 — The server is IPv4 only.**
+A client that connects to `::1` on the server's port is refused, as
+`bind_addr` documents.
+
+Code: `s16_serve.py::t324`.
+
+**T-325 — The child holds nothing of the parent's.**
+Inside the handler, the open descriptors are the ones the process had
+before its first `proto_serve`, plus the connection: the listener and
+the stop channel are closed. After a stop with `drain_ms` 0 while a
+child is still serving, a new `proto_serve` binds the same port at once:
+the child does not keep the port, as the stop promises.
+
+Code: `s16_serve.py::t325`.
+
+**T-326 — `bind_addr` restricts who can connect.**
+With `127.0.0.1`, a connection to the host's own non-loopback IPv4
+address on the server's port is refused, and the listening socket, found
+among the process's descriptors, reports `127.0.0.1` through
+`getsockname`. Skip where the host has no non-loopback IPv4.
+
+Code: `s16_serve.py::t326`.
+
+**T-327 — Signals do not disturb the accept loop.**
+`SIGUSR1` at about 1 kHz into a handler installed without `SA_RESTART`,
+while 50 clients connect in turn: every client is served, and after the
+stop `proto_serve` returns `PROTO_OK`, never `PROTO_E_ACCEPT`.
+
+Code: `s16_serve.py::t327`.
+
+---
+
+## XIX. `proto_serve_stop` and draining
+
+**T-328 — A stop from a signal handler ends `proto_serve` with `PROTO_OK`.**
+`SIGTERM` routed to `proto_serve_stop`: `PROTO_OK`, and a new connection
+is refused afterwards (`ECONNREFUSED`), since the port is free.
+
+Code: `s17_stop.py::t328`.
+
+**T-329 — A stop from another thread ends `proto_serve`.**
+`PROTO_OK`. (observed)
+
+Code: `s17_stop.py::t329`.
+
+**T-330 — A stop from another thread is free of data races.**
+**Fails today.** ThreadSanitizer reports two races (observed):
+`stop_asked`, written at `serve.c:67` and read at `serve.c:182`, and
+`stop_fd`, read at `serve.c:68` and written at `serve.c:177`. A
+`volatile sig_atomic_t` is safe against a signal handler, not against
+another thread, and `serve.h` promises "from any thread". Expect a clean
+TSan run: lock-free C11 atomics are safe for both.
+
+Code: `s17_stop.py::t330`.
+
+**T-331 — A stop before `proto_serve` is kept, but the setup still runs.**
+A bad port is still reported; with a good setup, `proto_serve` returns
+`PROTO_OK` without accepting. (observed)
+
+Code: `s17_stop.py::t331`.
+
+**T-332 — A stop outlives a failed call.**
+**Pin.** A stop, then `proto_serve` with a `NULL` allowlist gives
+`PROTO_E_NO_ALLOWLIST`; a good call after it returns `PROTO_OK` at once.
+(observed)
+
+Code: `s17_stop.py::t332`.
+
+**T-333 — A stop after `proto_serve` returned is kept for the next call.**
+As documented.
+
+Code: `s17_stop.py::t333`.
+
+**T-334 — Many stops never block.**
+10^5 stops in a row all return, and the call after next runs normally:
+at most one stray byte is left in the channel.
+
+Code: `s17_stop.py::t334`.
+
+**T-335 — `proto_serve_stop` preserves `errno`.**
+On the first call, on later calls, and on a call before any
+`proto_serve`.
+
+Code: `s17_stop.py::t335`.
+
+**T-336 — A stop wins over a waiting client.**
+With the server held by `SIGSTOP`, a client connects and `SIGTERM` is
+sent; on `SIGCONT`, `proto_serve` returns without accepting, the handler
+never runs, and the client sees its connection reset or closed.
+
+Code: `s17_stop.py::t336`.
+
+**T-337 — `drain_ms` 0 returns at once and leaves children serving.**
+While a child is serving, `proto_serve` returns at once, and that child
+goes on serving its client afterwards (`PING` still gets `PONG`).
+
+Code: `s17_stop.py::t337`.
+
+**T-338 — The drain returns when the last child ends.**
+`drain_ms` 2000, with the last child ending at 500 ms: returns at about
+500 ms.
+
+Code: `s17_stop.py::t338`.
+
+**T-339 — `drain_ms` bounds the wait.**
+`drain_ms` 500 with a busy child: returns at about 500 ms, with the
+child still alive.
+
+Code: `s17_stop.py::t339`.
+
+**T-340 — The drain counts the application's own children.**
+**Pin.** One that sleeps 1 s, forked before `proto_serve`, holds the
+return until about 1 s with `drain_ms` 3000 (observed: 1002 ms).
+Documented; the test keeps it so.
+
+Code: `s17_stop.py::t340`.
+
+**T-341 — `drain_ms` `INT_MAX` with no children returns at once.**
+No child, nothing to wait for.
+
+Code: `s17_stop.py::t341`.
+
+**T-342 — A stop during the drain belongs to the stop in progress.**
+The next `proto_serve` runs normally.
+
+Code: `s17_stop.py::t342`.
+
+**T-343 — A child that receives the stop signal itself exits at once.**
+Through the handler it inherited, the child exits 0 at once, and the
+server keeps accepting.
+
+Code: `s17_stop.py::t343`.
+
+**T-344 — `SIGTERM` to the whole process group ends everything cleanly.**
+The parent returns `PROTO_OK` and exits 0, and the children exit 0: the
+measurement in `RELEASE_NOTES.md`, on every run.
+
+Code: `s17_stop.py::t344`.
+
+**T-345 — A handler that calls `proto_serve_stop()` ends only its own child.**
+With status 0, and the parent goes on serving.
+
+Code: `s17_stop.py::t345`.
+
+**T-346 — Serving and stopping on one port, 50 times over, always works.**
+`PROTO_OK` each time, never `PROTO_E_PORT_IN_USE`, and a flat fd count
+after the first.
+
+Code: `s17_stop.py::t346`.
+
+**T-347 — A stop on the busy path is honoured right after it.**
+While the loop is on the busy path (`fork` failing, a silent client, the
+100 ms read), a stop ends the loop as soon as that path is done. (seam)
+
+Code: `s17_stop.py::t347`.
+
+---
+
+## XX. Process-wide effects of `proto_serve`
+
+**T-348 — The child reaper is removed when `proto_serve` returns.**
+**Fails today.** It stays installed (observed): in the parent,
+`pclose(popen("exit 3"))` returns -1 with `ECHILD`, and `waitpid` on a
+child of the application's own fails with `ECHILD` (both observed). The
+code after a stop, "close your storage, log, exit 0", is exactly where
+an application might run a helper. Expect the previous `SIGCHLD`
+disposition back on return, and on every setup failure that happens
+after it was changed.
+
+Code: `s18_process.py::t348`.
+
+**T-349 — `SIGPIPE` stays ignored after `proto_serve` returns.**
+**Pin.** (observed) The documents say the harness ignores it, not that
+it goes on ignoring it. Decide: restore it, or document it.
+
+Code: `s18_process.py::t349`.
+
+**T-350 — An application's `SIGCHLD` handler is replaced without a word.**
+**Pin.** A handler installed before `proto_serve` is gone after it, and
+nothing says so.
+
+Code: `s18_process.py::t350`.
+
+**T-351 — Setup failures after the dispositions change leave them changed.**
+**Pin.** `PROTO_E_SOCKET`, `PROTO_E_PORT_IN_USE`, `PROTO_E_PERM_DENIED`,
+`PROTO_E_BIND` and `PROTO_E_LISTEN` leave them changed; the failures
+before (`PROTO_E_NO_ALLOWLIST` to `PROTO_E_PARAM`) do not.
+
+Code: `s18_process.py::t351`.
+
+**T-352 — In the child, `SIGCHLD` is at its default and `SIGPIPE` is ignored.**
+A handler's `pclose(popen("exit 3"))` returns status 3 (the
+v1.1 fix: the reaper used to swallow the application's children), and a
+raw `write()` to a closed peer fails with `EPIPE` instead of killing the
+child.
+
+Code: `s18_process.py::t352`.
+
+**T-353 — The reaper keeps `errno`.**
+A child that exits between an `accept` failing with `EMFILE` and the
+check does not turn it into `ECHILD`, so the server never returns
+`PROTO_E_ACCEPT` over it. Stress the window with many short-lived
+children. (seam)
+
+Code: `s18_process.py::t353`.
+
+**T-354 — The application's own signal handlers reach the children unchanged.**
+As documented.
+
+Code: `s18_process.py::t354`.

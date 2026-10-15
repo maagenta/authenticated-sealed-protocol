@@ -39,7 +39,7 @@ def stated_verdict(body):
 def stated_tags(body):
     """Tags in the last parenthesised list of the entry, before its Code line."""
     body = re.sub(r"\s+", " ", re.split(r"\nCode: ", body)[0].strip())
-    m = re.search(r"\(([A-Za-z, ]+)\)\s*$", body)
+    m = re.search(r"\(([A-Za-z0-9, ]+)\)\s*$", body)
     if not m:
         return set()
     tags = set()

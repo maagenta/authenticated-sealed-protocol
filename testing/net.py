@@ -165,6 +165,7 @@ class Peer(object):
         self.s = sock
         self.buf = b""
         self.eof = False
+        self.rx = bytearray()           # every byte that ever arrived, for audits
 
     def fileno(self):
         return self.s.fileno()
@@ -194,6 +195,7 @@ class Peer(object):
             self.eof = True
         else:
             self.buf += data
+            self.rx += data
         return True
 
     reset = False
