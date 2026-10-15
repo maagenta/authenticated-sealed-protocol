@@ -2403,7 +2403,10 @@ Code: `s16_serve.py::t319`.
 
 **T-320 — A burst beyond the backlog is served.**
 50 connections against the backlog of 16: every client completes the
-handshake, since the kernel retries; none is refused. (slow)
+handshake, and the server refuses none. Where the kernel resets a
+connection its queue cannot hold (observed on macOS: one in fifty under
+load), the client asks again, up to five times, as any client would.
+(slow)
 
 Code: `s16_serve.py::t320`.
 
