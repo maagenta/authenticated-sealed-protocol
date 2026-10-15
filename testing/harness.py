@@ -164,7 +164,7 @@ REGISTRY = {}
 
 def case(tid, verdict=GUARD, tags=(), finding_on=None, variant_safe=False,
          timeout=None):
-    """Register fn as test tid of the catalogue."""
+    """Register fn as test tid, the one testing/README.md describes under that id."""
     def deco(fn):
         if tid in REGISTRY:
             raise RuntimeError("duplicate test id " + tid)

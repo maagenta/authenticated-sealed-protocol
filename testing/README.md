@@ -12,6 +12,64 @@ The suite checks what the code and the documents (`docs.md`, `architecture.md`,
 disagree, the test says so and fails, marked as expected to fail, until one of
 them changes.
 
+It comes from a line-by-line pass over `protocol.h`, `status.{h,c}`,
+`wire.{h,c}`, `crypto.{h,c}`, `auth.{h,c}`, `serve.{h,c}` and `keygen/keygen.c`.
+Every entry names a concrete behaviour the code claims to provide, or that a
+document promises, so that each test checks that the library still does what
+the documents say it does. The entries describe v1.2 (unreleased, commit
+`2ae04f5`). The ids run from `T-001` to `T-425`: v1.x can grow to `T-500`, and
+the tests of v2.0 start at `T-501`. Numbers follow the order of this file; the
+Roman numerals of the sections are cosmetic.
+
+## What the suite covers
+
+- the 5 library sources and 6 headers, plus `keygen/keygen.c` and its
+  `Makefile`;
+- the 3 timeouts and 2 framing options at the build level;
+- the 44 status codes (41 failures, 3 successes);
+- the 22 public functions of `status`, `wire`, `crypto`, `auth` and `serve`;
+- the `keygen` contract: no overwrite, mode 0600, no keys without a terminal's
+  yes, the filesystem probe;
+- the end-to-end flows and recipes of `docs.md` and `architecture.md`;
+- the library under sanitizers, valgrind, fuzzing, static analysis and coverage,
+  and under load;
+- every fix and feature `RELEASE_NOTES.md` describes for v1.1 and v1.2 (the
+  table at the end of this file).
+
+Of the 425 tests, 354 are guards, 33 are findings and 38 are pins
+(the verdicts are explained below). The findings are listed under
+[Tests that fail today](#tests-that-fail-today).
+
+| Section | Tests | Guards | Findings | Pins |
+|---|---|---|---|---|
+| I. Build, configuration and headers | 25 | 20 | 3 | 2 |
+| II. `proto_strerror` and the status codes | 9 | 8 | 0 | 1 |
+| III. `proto_init` | 2 | 2 | 0 | 0 |
+| IV. `proto_send_line`, `proto_send_prefixed` | 15 | 11 | 2 | 2 |
+| V. `proto_recv_line` | 28 | 23 | 0 | 5 |
+| VI. `proto_recv_line_timeout` | 14 | 12 | 0 | 2 |
+| VII. `proto_recv_line_dyn`, `proto_recv_line_dyn_status` | 18 | 17 | 0 | 1 |
+| VIII. `proto_keepalive` | 11 | 9 | 0 | 2 |
+| IX. Key files | 36 | 32 | 4 | 0 |
+| X. `proto_load_keys` | 12 | 11 | 0 | 1 |
+| XI. `proto_load_pubkey_hex` | 8 | 6 | 1 | 1 |
+| XII. `proto_seal`, `proto_seal_new`, `proto_unseal_new` | 24 | 23 | 1 | 0 |
+| XIII. `proto_sign_challenge`, `proto_verify_challenge` | 9 | 9 | 0 | 0 |
+| XIV. `proto_auth_client` | 19 | 14 | 1 | 4 |
+| XV. `proto_auth_server` | 23 | 19 | 2 | 2 |
+| XVI. `proto_connect` | 28 | 20 | 2 | 6 |
+| XVII. `proto_close` | 10 | 8 | 1 | 1 |
+| XVIII. `proto_serve` | 36 | 32 | 3 | 1 |
+| XIX. `proto_serve_stop` and draining | 20 | 17 | 1 | 2 |
+| XX. Process-wide effects of `proto_serve` | 7 | 3 | 1 | 3 |
+| XXI. The `keygen` tool | 19 | 14 | 3 | 2 |
+| XXII. End-to-end and integration | 16 | 15 | 1 | 0 |
+| XXIII. Sanitizers, fuzzing and static analysis | 17 | 16 | 1 | 0 |
+| XXIV. Documentation and source-level invariants | 10 | 6 | 4 | 0 |
+| XXV. Load and soak | 7 | 7 | 0 | 0 |
+| XXVI. Found by the fuzz targets | 2 | 0 | 2 | 0 |
+| **Total** | **425** | **354** | **33** | **38** |
+
 ## Running the tests
 
 ```
@@ -83,6 +141,12 @@ only run there, `(root)` needs privileges, `(not as root)` must not have them,
 | `PROTO_TEST_SRC` | A directory with a copy of the sources to build instead of the real ones: the mutation test (T-406) points it at copies with one expression altered. |
 
 ## How a test runs
+
+**Words.** A *control line* is a short reply read into a fixed buffer with
+`proto_recv_line` or `proto_recv_line_timeout` (the handshake, `OK`, `FAIL`); a
+*payload line* is a possibly large message read with `proto_recv_line_dyn` or
+`proto_recv_line_dyn_status`. A *scripted peer* is a thread that reads and writes
+a fixed list of lines, standing in for the other end of a connection.
 
 **Isolation.** Every test runs in a forked child with its own process group, its
 own temporary directory, its standard streams captured and a hard deadline. A
@@ -197,11 +261,13 @@ says also depends on the system headers. A host without a baseline notes what it
 found and skips the comparison; `--record-baselines` writes the files, and a CI
 log that shows the counts is enough to commit them.
 
-What was measured where: the expectations marked `(observed)` in the entries
-were measured on macOS 14 (x86-64, Apple clang 16, libsodium 1.0.20). What was
-worked out from the code or the kernel is marked `(reasoned)`, and the first run
-on that platform settles it. A pin that records a platform's behaviour skips on
-a platform it has no baseline for, and says so.
+What was measured where: where a claim was in doubt, a throwaway probe settled
+it on macOS 14.8.4 (Darwin 23.6.0, x86-64) with Apple clang 16.0.0 and libsodium
+1.0.20, and the entry marks the result `(observed)`. Nothing had run on Linux or
+the BSDs when the entries were written: what was worked out from the code or the
+kernel is marked `(reasoned)`, and the first run on that platform settles it. A
+pin that records a platform's behaviour skips on a platform it has no baseline
+for, and says so.
 
 ## Adding a test
 
@@ -218,8 +284,109 @@ def t426():
 ```
 
 `python3 testing/run.py --check` fails if a test and an entry disagree on the
-id, the verdict or the tags. A test that can crash runs under its own child
-anyway; one that expects a crash of a call wraps it in `harness.in_child`.
+id, the verdict or the tags, or if the table of counts at the top of this file
+does not add up. It does not read the lists under *Tests that fail today* and
+*Open questions*: a new finding, or a fix, changes those by hand. A test that
+can crash runs under its own child anyway; one that expects a crash of a call
+wraps it in `harness.in_child`.
+
+---
+
+## Tests that fail today
+
+Each needs a decision before its test can be green. Until then the test runs
+marked as expected to fail, so the job stays green, and the day a fix lands it
+turns into an ordinary test: its `@case` becomes a guard, and **Fails today.**
+leaves its entry. Observed unless marked.
+
+Defects:
+
+1. **T-143** A NUL byte after a key loads as valid: `strcspn` stops at the NUL,
+   and nothing after it is checked.
+2. **T-007** A timeout above `INT_MAX` compiles with only a warning and wraps
+   negative: `HANDSHAKE_TIMEOUT_MS=3000000000` removes the handshake deadline,
+   and `CONNECT_TIMEOUT_MS=3000000000` makes every connection time out.
+3. **T-348** The `SIGCHLD` reaper outlives `proto_serve`: after it returns,
+   `pclose(popen("exit 3"))` and `waitpid` in the parent fail with `ECHILD`.
+4. **T-330, T-392** ThreadSanitizer reports data races on `stop_asked` and
+   `stop_fd` for a stop from another thread, which `serve.h` declares safe.
+5. **T-360** A dangling symlink named `enc.key` or `auth.pub` makes `keygen` fail
+   halfway and leave a partial identity behind.
+6. **T-367** Under a file-size limit `keygen` dies of `SIGXFSZ` and leaves an
+   empty `auth.key` that blocks every later run.
+7. **T-277, T-323** No close-on-exec on the client connection, the listening
+   socket or the stop channel.
+8. **T-299** (macOS) A second server on the same port starts silently when the
+   two bind addresses differ.
+9. **T-318** What a handler prints without `fflush` is lost at the child's
+   `_exit`.
+10. **T-149** A Unix-domain socket at a key path is reported as
+    `PROTO_E_KEY_OPEN`, "out of descriptors or memory".
+11. **T-051, T-174, T-198, T-290** Four `NULL` arguments crash the process:
+    `proto_send_line(fd, NULL)`, `proto_load_pubkey_hex(path, NULL, 65)`,
+    `proto_unseal_new(NULL, ...)` and `proto_close(NULL)`.
+12. **T-014, T-015** The sources rely on the platform's default feature level: a
+    strict `-std=c11` or `-std=c99` on glibc and musl hides POSIX declarations
+    they use (reasoned), and `-D_POSIX_C_SOURCE=200809L` on macOS hides
+    `TCP_KEEPALIVE`.
+
+The code and the documents disagree:
+
+13. **T-246, T-247** No `FAIL` line after a handshake timeout or an oversized
+    line, although "every failure path" promises one; the oversized case also
+    ends in a reset. Decide which side moves.
+14. **T-226** The reason for a refusal is consumed and lost; `auth.c` says the
+    caller can read it off the wire.
+15. **T-262** `PROTO_E_BAD_PORT` on a connected conn leaves the connection open;
+    `docs.md` says `fd` is left at -1 and the socket closed.
+16. **T-050, T-381** Pipes can be read but not written, while the documents
+    present pipes as the case of a protocol tunnelled through stdin and stdout.
+17. **T-136, T-144, T-361** Misleading diagnoses: a URL-safe key with a leading
+    `-` is "stray characters", a UTF-16 file is "first line is blank", a stale
+    probe file is "cannot create files here".
+18. **T-408, T-410, T-411, T-414** `server busy` is missing from the list of
+    `FAIL` reasons, the "Returned by" columns are incomplete, two FAQ entries
+    predate the status codes, and the statements the probes contradict wait for
+    their fixes.
+
+Found by the fuzz targets:
+
+19. **T-424, T-425** A byte above 0x7F inside a key, or in place of a character
+    of a sealed box, is taken for a character of the alphabet: a damaged key file
+    loads as another key, and an altered box can still open.
+
+T-014 is a finding on Linux alone, so a run on macOS shows 32 of these 33 as
+expected failures.
+
+## Open questions
+
+Each is a pin that says "Decide": whether the texts of the messages are part of
+the contract (T-027); a `\n` inside an outgoing line (T-049); how `\r` is
+described (T-055); NUL bytes inside lines (T-056, T-109, T-237); an
+application's `SO_RCVTIMEO` (T-076); `ms == 0` in the timed reader (T-086) and
+fd -1 under a deadline (T-092); all-zero keys (T-165, T-278); a bare `FAIL`
+before the challenge (T-218); a `FAIL` lost when `HELLO` cannot be sent (T-228);
+lenient `AUTH` parsing (T-240); `NULL` and `""` hosts (T-264); leading zeros in
+`bind_addr`, accepted by one libc and refused by others (T-296), and a broadcast
+`bind_addr` (T-297); `SIGPIPE` left ignored (T-349); `keygen` ignoring its
+arguments (T-368) and leaving its keys in memory (T-373); C++ consumers (T-021);
+and the `keygen` Makefile (T-024). The `NULL` arguments that crash where no
+document promises otherwise (T-063, T-229, T-280) are decided with T-051.
+
+Not a pin but a question all the same: `proto_serve` listens with a backlog of
+16, and on macOS the kernel resets some of a burst beyond it (T-320: up to two
+of fifty clients under load; a flood of 500 opened at once: 5 to 16 reset, and
+once 65 lost without a reset). The tests ask again, or open the connections one
+after the other (T-418); whether the library should ask for a larger queue is
+open.
+
+## Tests that change with v2.0
+
+Five tests describe today's gaps and flip when v2.0 closes them: T-384 (the
+relay) with the channel, T-385 (a forged entry) with signed entries, T-221 (any
+32 bytes signed) with a signature context, and T-170 and T-176 (key files that
+look alike) with labelled key files. T-126 must keep passing, since v1.x has to
+load the files v2.0 writes.
 
 ---
 

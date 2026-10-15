@@ -1,7 +1,8 @@
 """Keep README.md and the registered tests in step (run.py --check).
 
-Every registered test has an entry in README.md, every entry has a test, and the
-verdict and tags the README states are the ones the test is registered with.
+Every registered test has an entry in README.md, every entry has a test, the
+verdict and tags the README states are the ones the test is registered with, and
+the table of counts at the top of the README adds up to the registry.
 """
 
 import os
@@ -12,6 +13,8 @@ import harness
 README = os.path.join(harness.HERE, "README.md")
 
 ENTRY = re.compile(r"^\*\*(T-\d{3}) — ", re.M)
+COUNTS = re.compile(r"^\| ([IVX]+)\. .*? \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|$", re.M)
+TOTAL = re.compile(r"^\| \*\*Total\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \|$", re.M)
 TAG_NAMES = {"linux": "linux", "macos": "macos", "root": "root", "not as root": "notroot",
              "seam": "seam", "slow": "slow", "ipv6": "ipv6", "fuzz": "fuzz"}
 
@@ -50,11 +53,35 @@ def stated_tags(body):
     return tags
 
 
+def counts_of(tests):
+    """[tests, guards, findings, pins] of a list of registered tests."""
+    return [len(tests)] + [sum(1 for c in tests if c.verdict == v)
+                           for v in (harness.GUARD, harness.FINDING, harness.PIN)]
+
+
+def count_problems(text):
+    """The table of counts against the registry, section by section and in total."""
+    problems = []
+    rows = {m.group(1): [int(g) for g in m.groups()[1:]] for m in COUNTS.finditer(text)}
+    if not rows:
+        return ["the table of counts under 'What the suite covers' is missing"]
+    for numeral, got in sorted(rows.items()):
+        want = counts_of([c for c in harness.REGISTRY.values() if c.section == numeral])
+        if got != want:
+            problems.append("section %s: the table says %s (tests, guards, findings, pins), the registry has %s"
+                            % (numeral, got, want))
+    total = TOTAL.search(text)
+    want = counts_of(list(harness.REGISTRY.values()))
+    if not total or [int(g) for g in total.groups()] != want:
+        problems.append("the total of the table of counts is not %s (tests, guards, findings, pins)" % want)
+    return problems
+
+
 def main():
     with open(README, encoding="utf-8") as f:
         text = f.read()
     found = entries(text)
-    problems = []
+    problems = count_problems(text)
     for tid in sorted(set(harness.REGISTRY) - set(found)):
         problems.append("%s is registered but has no README entry" % tid)
     for tid in sorted(set(found) - set(harness.REGISTRY)):
@@ -77,7 +104,7 @@ def main():
         numbers = [int(i[2:]) for i in ids]
         gaps = [n for n in range(min(numbers), max(numbers) + 1) if "T-%03d" % n not in harness.REGISTRY]
         if gaps and os.environ.get("PROTO_TEST_PARTIAL") != "1":
-            problems.append("tests missing from the catalogue: %s" % ", ".join("T-%03d" % g for g in gaps[:12]))
+            problems.append("ids with no test, inside the numbering: %s" % ", ".join("T-%03d" % g for g in gaps[:12]))
     if problems:
         print("\n".join(problems))
         print("\n%d problem(s)" % len(problems))

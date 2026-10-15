@@ -3,7 +3,7 @@
 
     python3 testing/run.py                  everything that applies here, not slow
     python3 testing/run.py --slow           ... and the slow ones too
-    python3 testing/run.py --section VII    one section of the catalogue
+    python3 testing/run.py --section VII    one section of testing/README.md
     python3 testing/run.py --id T-057       one test; ranges: T-052..T-079
     python3 testing/run.py --list           what there is, and what would be skipped
     python3 testing/run.py --check          the registry against README.md
