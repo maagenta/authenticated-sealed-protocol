@@ -21,6 +21,9 @@ import sys
 import harness
 from harness import HERE, PLATFORM, ROOT
 
+# Where the library's sources are. The mutation test (T-406) points it at a copy
+# with one expression altered.
+SRC = os.environ.get("PROTO_TEST_SRC") or ROOT
 BUILD_DIR = os.path.join(HERE, ".build")
 PROBE_DIR = os.path.join(HERE, "probes")
 LIB_SOURCES = ["status.c", "wire.c", "crypto.c", "auth.c", "serve.c"]
@@ -123,8 +126,8 @@ def sources_digest(with_probes=False):
     """Changes whenever a top-level source or header (and, if asked, a probe) changes."""
     if with_probes not in _digests:
         h = hashlib.sha1()
-        paths = glob.glob(os.path.join(ROOT, "*.c")) + glob.glob(os.path.join(ROOT, "*.h")) \
-            + glob.glob(os.path.join(ROOT, "keygen", "*.c"))
+        paths = glob.glob(os.path.join(SRC, "*.c")) + glob.glob(os.path.join(SRC, "*.h")) \
+            + glob.glob(os.path.join(SRC, "keygen", "*.c"))
         if with_probes:
             paths += glob.glob(os.path.join(PROBE_DIR, "*"))
         for p in sorted(paths):
@@ -224,8 +227,8 @@ def build_shared(variant):
         os.makedirs(out_dir, exist_ok=True)
         c_flags, ld_flags = sodium()
         tmp = out + ".tmp%d" % os.getpid()
-        cmd = ([cc()] + flags + ["-I", ROOT] + c_flags + ["-o", tmp]
-               + [os.path.join(ROOT, s) for s in LIB_SOURCES] + ld_flags)
+        cmd = ([cc()] + flags + ["-I", SRC] + c_flags + ["-o", tmp]
+               + [os.path.join(SRC, s) for s in LIB_SOURCES] + ld_flags)
         _compile_all(tmp, [cmd])
         os.replace(tmp, out)
     return out
@@ -300,7 +303,7 @@ def build_exe(name, probe_src=None, variant="fast", seams=None, sanitize=None,
     probe_src = probe_src or (name + ".c")
     defs = variant_defines(variant) if defines is None else list(defines)
     san = SANITIZE[sanitize] if sanitize else []
-    flags_common = ["-O1", "-g", "-Wall", "-Wextra", "-I", ROOT, "-I", PROBE_DIR] + defs + san \
+    flags_common = ["-O1", "-g", "-Wall", "-Wextra", "-I", SRC, "-I", PROBE_DIR] + defs + san \
         + list(extra_cflags)
     key = _key("exe", name, probe_src, variant, defs, sorted(seams.items()), sanitize,
                list(sources), list(extra_cflags), list(extra_ld), sodium_override, probes=True)
@@ -319,7 +322,7 @@ def build_exe(name, probe_src=None, variant="fast", seams=None, sanitize=None,
                 src = os.path.join(PROBE_DIR, probe_src)
                 extra = []
             else:
-                src = os.path.join(ROOT, s)
+                src = os.path.join(SRC, s)
                 extra = seams.get(s, [])
                 if extra:
                     extra = ["-U_FORTIFY_SOURCE"] + extra
@@ -343,7 +346,7 @@ def try_compile(text, flags=(), compiler=None, name="t.c", link=False, with_sodi
         f.write(text)
     c_flags, ld_flags = sodium() if with_sodium else ([], [])
     out = os.path.join(d, "t.out" if link else "t.o")
-    cmd = [compiler or cc()] + ([] if link else ["-c"]) + ["-o", out, "-I", ROOT] + c_flags \
+    cmd = [compiler or cc()] + ([] if link else ["-c"]) + ["-o", out, "-I", SRC] + c_flags \
         + list(flags) + [path] + (ld_flags if link else [])
     return run(cmd)
 
@@ -352,8 +355,8 @@ def compile_source(source, flags=(), compiler=None):
     """Compile one library source to an object file in the case's directory."""
     d = harness.tmpdir("cc")
     c_flags, _ = sodium()
-    cmd = [compiler or cc(), "-c", "-o", os.path.join(d, "t.o"), "-I", ROOT] + c_flags \
-        + list(flags) + [os.path.join(ROOT, source)]
+    cmd = [compiler or cc(), "-c", "-o", os.path.join(d, "t.o"), "-I", SRC] + c_flags \
+        + list(flags) + [os.path.join(SRC, source)]
     return run(cmd)
 
 
@@ -389,7 +392,7 @@ def build_keygen():
         c_flags, ld_flags = sodium()
         tmp = out + ".tmp%d" % os.getpid()
         _compile_all(tmp, [[cc(), "-Wall", "-Wextra", "-O2", "-o", tmp,
-                            os.path.join(ROOT, "keygen", "keygen.c")] + c_flags + ld_flags])
+                            os.path.join(SRC, "keygen", "keygen.c")] + c_flags + ld_flags])
         os.replace(tmp, out)
     return out
 

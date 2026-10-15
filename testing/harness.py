@@ -84,6 +84,7 @@ SECTIONS = [
     ("XXIII", 390, 406, "Sanitizers, fuzzing and static analysis"),
     ("XXIV", 407, 416, "Documentation and source-level invariants"),
     ("XXV", 417, 423, "Load and soak"),
+    ("XXVI", 424, 425, "Found by the fuzz targets"),
 ]
 
 
@@ -478,6 +479,9 @@ def judge(c, out):
         problem = True
         msg = "the library wrote to stdout or stderr: %r" % out.noise[:120]
     if verdict == FINDING:
+        if out.kind == "error":
+            # An exception is the case being wrong, not the finding holding: it must not hide there.
+            return "FAIL", "error: %s" % msg
         if problem:
             return "XFAIL", msg
         return "XPASS", "the finding now passes: make it a guard"

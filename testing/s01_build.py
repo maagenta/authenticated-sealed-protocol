@@ -227,18 +227,25 @@ def t013():
             lines = set(l for l in out.splitlines() if "warning:" in l)
             counts[s] = len(lines)
         results[family] = counts
+    compared = False
     for family, counts in results.items():
-        bname = "warnings-%s.txt" % family
+        bname = "warnings-%s-%s.txt" % (family, PLATFORM)        # what a compiler says depends on the headers too
         if baselines.recording():
-            baselines.save(bname, counts, "warnings per source with the extended set (T-013), %s" % family)
+            baselines.save(bname, counts, "warnings per source with the extended set (T-013), %s on %s"
+                           % (family, PLATFORM))
             continue
         base = baselines.load(bname)
         if base is None:
-            harness.note("no warning baseline for %s: run with --record-baselines" % family)
-            skip("no warning baseline recorded for %s yet (--record-baselines)" % family)
+            harness.note("no warning baseline for %s on %s yet (--record-baselines); findings now: %r"
+                         % (family, PLATFORM, counts))
+            continue
+        compared = True
         worse = ["%s: %d (was %d)" % (s, n, base.get(s, 0)) for s, n in counts.items()
                  if n > base.get(s, 0)]
         check(not worse, "new warnings: " + "; ".join(worse))
+    if not compared and not baselines.recording():
+        skip("no warning baseline recorded for the compilers of this host yet (--record-baselines); "
+             "findings now: %s" % results)
 
 
 @case("T-014", FINDING, finding_on=("linux",))

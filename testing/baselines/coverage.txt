@@ -1,0 +1,6 @@
+# line coverage floor per file, in percent (T-401); ten points under the first run
+auth.c 70
+crypto.c 84
+serve.c 62
+status.c 90
+wire.c 80

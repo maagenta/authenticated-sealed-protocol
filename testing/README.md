@@ -4,7 +4,7 @@ This directory holds the test suite of the library and the harness that runs it,
 on a developer's machine and in CI. Every test has an entry in this file, in the
 order of the library: build, status codes, wire, key files, cryptography,
 handshake, connecting, serving, the `keygen` tool, end to end, sanitizers and
-fuzzing, documentation, load. The entry says what the test does and what it
+fuzzing. The entry says what the test does and what it
 expects; the `Code:` line says where it is.
 
 The suite checks what the code and the documents (`docs.md`, `architecture.md`,
@@ -35,12 +35,12 @@ and the problems also go to the job summary.
 | Result | Meaning |
 |---|---|
 | `PASS` | A guard or a pin held. |
-| `FAIL` | A guard or a pin did not hold: a regression, or a difference between platforms to look into. |
+| `FAIL` | A guard or a pin did not hold: a regression, or a difference between platforms to look into. A finding that ends in an exception of the test itself, and not in the failure it describes, is a `FAIL` too: a finding must not hide a broken test. |
 | `XFAIL` | A finding failed, as it does today. The run stays green. |
 | `XPASS` | A finding passed: the defect is fixed. The run fails until the test is made a guard (`FINDING` to `GUARD` in its `@case`, and the **Fails today.** line out of its entry here). |
 | `SKIP` | The test does not apply here: another platform, no privilege, a tool this host lacks, or a slow test run without `--slow`. |
 
-The verdicts are the catalogue's:
+A test has one of three verdicts:
 
 - A **guard** protects behaviour that is documented or plainly intended, and
   passes today.
@@ -64,17 +64,21 @@ only run there, `(root)` needs privileges, `(not as root)` must not have them,
   headers. The library is found with `pkg-config`, else under `/usr/local`,
   `/opt/homebrew`, `/opt/local` and `/usr/pkg`; `SODIUM_CFLAGS` and
   `SODIUM_LIBS` override that.
-- Optional, and the tests that need them skip without them: `nm`, a C++
-  compiler, `valgrind`, `cppcheck`, `nft` or `iptables` with `ip`, a
-  32-bit toolchain, a cross compiler for AArch64.
+- Optional, and the tests that need them skip without them: a compiler with
+  AddressSanitizer, UBSanitizer and ThreadSanitizer, `valgrind`, `cppcheck`,
+  `gcov`, `nm`, a C++ compiler, `nft` or `iptables` with `ip`, a 32-bit
+  toolchain, a cross compiler for AArch64.
 
 | Variable | Effect |
 |---|---|
 | `CC` | The compiler of every build. With it set, the build tests use only that one. |
 | `SODIUM_CFLAGS`, `SODIUM_LIBS` | Where libsodium is, when `pkg-config` does not know. |
+| `SODIUM32_CFLAGS`, `SODIUM32_LIBS` | The same for the 32-bit build (T-019, T-186, T-402). |
 | `PROTO_TEST_SLACK` | Multiplies the slack of every timing window. Slow hosts and emulators set 3 or 4. |
 | `PROTO_TEST_TIMEOUT` | Seconds a test may run before it is killed (default 60). |
-| `PROTO_FUZZ_SECONDS` | Time budget of each fuzz target (default 20; CI uses 60). |
+| `PROTO_FUZZ_SECONDS` | Time budget of each fuzz target (default 20; CI uses 60, nightly 300). |
+| `PROTO_FUZZ_SEED` | The seed of the fuzz targets, to repeat a run (default: the time). |
+| `PROTO_TEST_SRC` | A directory with a copy of the sources to build instead of the real ones: the mutation test (T-406) points it at copies with one expression altered. |
 
 ## How a test runs
 
@@ -91,12 +95,14 @@ the timeouts and framing options are compile-time:
 
 | Variant | Flags | Used for |
 |---|---|---|
-| `default` | none | the defaults themselves |
+| `default` | none | the defaults themselves, and the load tests, where a timeout must not interfere |
 | `fast` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=200`, `CONNECT_TIMEOUT_MS=500` | almost every test, so that timing tests take under a second |
 | `chunk1`, `chunk3` | `fast` and `READ_CHUNK=1` or `3` | T-011: the `wire` tests must pass unchanged |
 | `pay64` | `fast` and `MAX_PAYLOAD=64` | the boundaries of the payload cap, cheap to reach |
 | `pay64c1`, `pay64c3` | `pay64` with `READ_CHUNK` 1 and 3 | the cap however the bytes arrive (T-101) |
+| `pay4096` | `fast` and `MAX_PAYLOAD=4096` | the largest message of the vault of `docs.md` and one byte more (T-388) |
 | `min` | `HANDSHAKE_TIMEOUT_MS=1`, `QUIT_TIMEOUT_MS=0` | the smallest values the options take |
+| `quit0` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=0`, `CONNECT_TIMEOUT_MS=500` | `proto_close` that does not wait (T-288) |
 
 Builds are cached under `testing/.build/`, keyed on the sources and the flags.
 
@@ -104,16 +110,21 @@ Builds are cached under `testing/.build/`, keyed on the sources and the flags.
 `probes/`, built from the library sources and run as processes. The test judges
 them by their exit status and their log:
 
-- `seam_wire.c` and `seam_crypto.c` take over the libc calls of one source
-  (`-Dsend=seam_send`, `-Dread=seam_read`, and so on) to count them, shorten
-  them or make them fail. A seam object is built with `-U_FORTIFY_SOURCE`, and is
-  never shared with an unseamed binary. `LD_PRELOAD` is not used: macOS has none.
+- `seam_wire.c`, `seam_crypto.c`, `seam_auth.c` and `seam_serve.c` take over the
+  libc calls of one source (`-Dsend=seam_send`, `-Dread=seam_read`, and so on) to
+  count them, shorten them or make them fail. A seam object is built with
+  `-U_FORTIFY_SOURCE`, and is never shared with an unseamed binary. `LD_PRELOAD`
+  is not used: macOS has none.
 - `threads.c` calls the library from several threads, with and without
   ThreadSanitizer.
+- `suite.c` runs the core scenarios of the library in one program, for the
+  builds that Python cannot host: a sanitizer's runtime, a 32-bit build, musl, a
+  fortified build, a coverage build and valgrind.
 - `serve_probe.c` is a server on `proto_serve`, steered from the command line:
-  the handler a connection gets, the signals it routes to `proto_serve_stop`,
-  the drain, the number of serve cycles. It reports in a log file, one line per
-  event.
+  the handler a connection gets (an echo, the in-memory vault of `docs.md`, a
+  registration, a silent one, a crashing one, and so on), the signals it routes
+  to `proto_serve_stop`, the drain, the number of serve cycles. It reports in a
+  log file, one line per event.
 
 **Peers.** Tests that need the other end of a connection play it from Python
 (`peers.py`, `net.py`): a scripted server or client over a `socketpair` (it
@@ -127,6 +138,15 @@ a listener with a full accept queue (Linux) or from the `getaddrinfo` and
 monotonic clock, scaled by `PROTO_TEST_SLACK`. No test asserts a duration that
 is not its own deadline.
 
+**Fuzzing.** `fuzzing.py` has five targets: the key-file parser, the line
+readers, the server handshake, the client handshake and `proto_unseal_new`. Each
+mutates the inputs of its corpus for `PROTO_FUZZ_SECONDS`, in forked batches of a
+second so that a crash of the library is caught, and checks the result against a
+model of what the library must do. An input that breaks a property is written to
+`corpus/<target>/crash-<hash>` and stays there: T-404 replays every file of
+`corpus/` on every run, so a fixed defect cannot come back. The seeds are
+generated the same way each time.
+
 ## Files
 
 | File | What it holds |
@@ -134,18 +154,21 @@ is not its own deadline.
 | `run.py` | The command line. |
 | `harness.py` | The registry, the isolated runs, the verdicts and the report. |
 | `lib.py` | Compilers, libsodium, the build variants, the probes, and the `ctypes` binding. |
-| `runprobe.py`, `servers.py` | Running probes; starting and steering `serve_probe`. |
+| `runprobe.py`, `servers.py`, `suite.py` | Running probes; starting and steering `serve_probe`; running `suite.c` under the other builds. |
 | `net.py`, `peers.py` | Sockets, threads, descriptors; the protocol spoken from Python. |
 | `libsodium.py`, `keyfiles.py`, `statuses.py` | The libsodium oracle; key-file fixtures; the 44 status codes. |
+| `fuzzing.py` | The fuzz targets, their mutators and models, and the replay of the corpus. |
 | `docsx.py`, `baselines.py`, `readme_check.py` | Reading `docs.md`; baselines of the analyzers; this file against the registry. |
 | `sNN_*.py` | The tests, one module per section (a few sections share one). |
 | `probes/` | The C programs above. |
-| `baselines/` | What the warning and analyzer runs found when they were accepted. |
+| `baselines/` | What the warning, analyzer and coverage runs found when they were accepted, per compiler and platform. |
+| `corpus/` | The inputs of the fuzz targets: seeds, and the crashes kept as tests. |
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the suite on every push and pull request, and
-the slow tests, the fuzz targets and the privileged tests every night.
+`.github/workflows/ci.yml` runs the suite on every push and pull request, with
+the fuzz targets for a minute each on pull requests, and the slow tests, the fuzz
+targets for five minutes each, and the privileged tests every night.
 
 | Host | x86-64 | arm64 |
 |---|---|---|
@@ -155,9 +178,14 @@ the slow tests, the fuzz targets and the privileged tests every night.
 | OpenBSD 7.9, NetBSD 11.0 | VM on `ubuntu-24.04` (allowed to fail) | VM on `ubuntu-24.04` (allowed to fail) |
 
 The BSD machines run under QEMU through `cross-platform-actions/action`; the
-arm64 ones are emulated and slow, so they run with `PROTO_TEST_SLACK=4`. Nightly
-there is also a job in an Alpine container (musl), one for the 32-bit build,
-and a privileged one on Ubuntu for the `(root)` tests.
+arm64 ones are emulated and slow, so they run with `PROTO_TEST_SLACK=4`, and
+without the slow tests. Nightly there is also a job in an Alpine container
+(musl), one for the 32-bit build, and a privileged one on Ubuntu for the `(root)`
+tests. The warning and analyzer baselines (`baselines/`) are kept per compiler
+and per platform, such as `warnings-clang-macos.txt`, because what a compiler
+says also depends on the system headers. A host without a baseline notes what it
+found and skips the comparison; `--record-baselines` writes the files, and a CI
+log that shows the counts is enough to commit them.
 
 What was measured where: the expectations marked `(observed)` in the entries
 were measured on macOS 14 (x86-64, Apple clang 16, libsodium 1.0.20). What was
@@ -172,8 +200,8 @@ file in the same format, and register the function in the module of its
 section:
 
 ```python
-@case("T-424", PIN, tags=("seam",))
-def t424():
+@case("T-426", PIN, tags=("seam",))
+def t426():
     """Title of the entry."""
     P = lib.proto()
     ...
@@ -2643,3 +2671,380 @@ Code: `s18_process.py::t353`.
 As documented.
 
 Code: `s18_process.py::t354`.
+
+---
+
+## XXI. The `keygen` tool
+
+**T-355 — `keygen` in an empty directory makes three key files, mode 0600.**
+Exit 0, and `auth.key`, `auth.pub` and `enc.key` with mode 0600, of 89,
+45 and 45 bytes, each one line of base64 and a newline (observed).
+`enc.key` decodes to 32 bytes.
+
+Code: `s19_keygen.py::t355`.
+
+**T-356 — The files load.**
+`proto_load_keys` on the two secrets returns `PROTO_OK`, and
+`proto_load_pubkey_hex` on `auth.pub` equals `hex(keys.auth_pk)`.
+`auth.key` is libsodium's full secret, seed and public key: its last 32
+bytes equal the decoded `auth.pub`.
+
+Code: `s19_keygen.py::t356`.
+
+**T-357 — Every run makes a new identity.**
+Two runs in two directories make two different identities.
+
+Code: `s19_keygen.py::t357`.
+
+**T-358 — A second run refuses to overwrite.**
+In the same directory: exit 1 with a message naming `auth.key`, and
+nothing modified, contents and modification times alike (observed exit
+1).
+
+Code: `s19_keygen.py::t358`.
+
+**T-359 — Any one of the three files present stops the run before anything is written.**
+Exit 1, and no new file.
+
+Code: `s19_keygen.py::t359`.
+
+**T-360 — A dangling symlink at a key's name stops the run before anything is written.**
+**Fails today.** Named `enc.key`: exit 1, but
+`auth.key` and `auth.pub` are left behind (observed); named `auth.pub`:
+`auth.key` is left behind (observed). `access(F_OK)` follows the link
+and finds nothing there, then `O_EXCL` refuses the link: a partial
+identity, the thing the early check exists to prevent ("creates
+nothing"). Fix: check with `lstat`, or `faccessat` with
+`AT_SYMLINK_NOFOLLOW`.
+
+Code: `s19_keygen.py::t360`.
+
+**T-361 — A stale probe file does not stop `keygen`.**
+**Fails today.** (minor) A `.keygen-probe` left by an interrupted run
+gives "cannot create files here: File exists" and exit 1 (observed): the
+wrong diagnosis, and the user must find and delete a hidden file. Expect
+the run to go ahead: a unique probe name from `mkstemp`, or a stale
+probe removed.
+
+Code: `s19_keygen.py::t361`.
+
+**T-362 — A read-only directory is refused, and nothing is created.**
+Exit 1, "cannot create files here: Permission denied". (observed)
+
+Code: `s19_keygen.py::t362`.
+
+**T-363 — On a filesystem without permissions, a script gets no keys.**
+On a vfat loop mount with stdin not a terminal: the warning, "Aborted;
+no files were created.", exit 1, and an empty directory. Anything that
+is not a terminal counts as no. (root)
+
+Code: `s19_keygen.py::t363`.
+
+**T-364 — On a filesystem without permissions, only an explicit yes on a terminal goes ahead.**
+On a pseudo-terminal: `y` makes the files, with
+the WARNING variant of the final message; `n` and an empty answer abort
+and create nothing. A piped `y` is no answer: `confirm()` refuses
+whenever stdin is not a terminal. (root)
+
+Code: `s19_keygen.py::t364`.
+
+**T-365 — The umask can tighten the mode, never loosen it.**
+`umask 0277` gives files with mode 0400, still loadable (observed 0400);
+`umask 0` still gives 0600, since `open()` sets the mode.
+
+Code: `s19_keygen.py::t365`.
+
+**T-366 — A full disk removes the partial file.**
+A small tmpfs, filled beforehand: exit 1, an error naming the file, and
+the partial file removed. (root)
+
+Code: `s19_keygen.py::t366`.
+
+**T-367 — A file-size limit does not leave an empty `auth.key` behind.**
+**Fails today.** Under `ulimit -f 0`, `SIGXFSZ` kills `keygen` before it
+can clean up: an empty `auth.key` is left behind (observed), and the
+next run refuses because the file "already exists" (observed). Fix:
+ignore `SIGXFSZ`, so the write fails with `EFBIG` and the cleanup path
+that exists runs.
+
+Code: `s19_keygen.py::t367`.
+
+**T-368 — `keygen` ignores its arguments.**
+**Pin.** `keygen --help` generates an identity in the current directory
+(observed). Decide: refuse unknown arguments and print a usage line.
+
+Code: `s19_keygen.py::t368`.
+
+**T-369 — Progress goes to stdout and errors to stderr, with exit codes 0 and 1 only.**
+On every outcome in this section.
+
+Code: `s19_keygen.py::t369`.
+
+**T-370 — Two runs at once make one identity.**
+Two `keygen` processes started together in one directory: exactly one
+identity results, and it is consistent (`auth.pub` matches `auth.key`);
+the other process exits 1 having written nothing. `O_EXCL` is the guard
+against that race.
+
+Code: `s19_keygen.py::t370`.
+
+**T-371 — Nothing is written outside the current directory.**
+And no probe file survives a success or an abort.
+
+Code: `s19_keygen.py::t371`.
+
+**T-372 — The generated `enc.key` is not low-order.**
+Sealing to its public key works, so the failure of T-188 cannot come
+from `keygen`.
+
+Code: `s19_keygen.py::t372`.
+
+**T-373 — `keygen` leaves the secret keys in memory until it exits.**
+**Pin.** The keys and their base64 are not wiped. Low risk for a
+short-lived program; a check records the decision either way.
+
+Code: `s19_keygen.py::t373`.
+
+---
+
+## XXII. End-to-end and integration
+
+**T-374 — The worked example of `docs.md` runs.**
+`vault-server.c` and `vault-client.c`, extracted verbatim from `docs.md`
+and built with its Makefile: `PUT "note one"`, `PUT "note two"`, then
+`GET` returns both notes, as `[1]` and `[2]`, and the storage file
+contains neither plaintext. The server stores what it cannot read.
+
+Code: `s20_e2e.py::t374`.
+
+**T-375 — The quick start of `README.md` runs.**
+Client and server compile, and complete one `PUT` and its `OK`.
+
+Code: `s20_e2e.py::t375`.
+
+**T-376 — The first connection registers, and later ones go straight to `OK`.**
+The server of the registration recipe, with `proto_connect`: the
+first connection registers, and the server stores a 44-character key
+that decodes to the client's `enc_pk`; the second and the third go
+straight to `OK`, and the stored key is unchanged.
+
+Code: `s20_e2e.py::t376`.
+
+**T-377 — Two copies of one identity are one user.**
+Two clients holding copies of the same key files both authenticate, and
+read each other's entries, as the FAQ says.
+
+Code: `s20_e2e.py::t377`.
+
+**T-378 — A wrong allowlist is refused at connect.**
+A wrong allowlist, another identity's `auth.pub`, or the client's
+`enc.key` loaded as `auth.pub` (T-176): `PROTO_E_REJECTED` at connect.
+
+Code: `s20_e2e.py::t378`.
+
+**T-379 — A client written from the wire appendix alone interoperates.**
+Written in Python with PyNaCl, it authenticates against `proto_serve`:
+the documents are enough.
+
+Code: `s20_e2e.py::t379`.
+
+**T-380 — A server written from the wire appendix alone interoperates.**
+The same in reverse: it accepts `proto_connect`, registration included.
+
+Code: `s20_e2e.py::t380`.
+
+**T-381 — The protocol works over a pair of pipes.**
+**Fails today.** As through another program's stdin and stdout: the
+library can read but not write (T-050), so the handshake fails at
+`HELLO` with `PROTO_E_WRITE`. Decided together with T-050.
+The test hands the library one descriptor that carries both ways and is
+not a socket, a pseudo-terminal, which is what a program's standard
+input and output are when another program drives them: a pair of pipes
+cannot be given to a function that takes one descriptor.
+
+Code: `s20_e2e.py::t381`.
+
+**T-382 — A 10 MiB entry round-trips.**
+A 10 MiB plaintext, a line of about 14.0 MB (13.3 MiB), goes up with
+`proto_send_prefixed`, is read with `proto_recv_line_dyn`, comes back
+with `GET`, and opens identical. (slow)
+
+Code: `s20_e2e.py::t382`.
+
+**T-383 — An entry over the limit is refused cleanly.**
+A 13 MB plaintext, whose line exceeds 16 MiB: the server's
+`proto_recv_line_dyn_status` reports `PROTO_E_LINE_TOO_LONG`, the server
+answers `FAIL message too large` and closes, and the client reads the
+`FAIL` and then end of stream.
+
+Code: `s20_e2e.py::t383`.
+
+**T-384 — The relay attack works today.**
+A process in the middle relays `HELLO`, `CHALLENGE` and `AUTH` between a
+client and the server, and ends up holding an authenticated session
+without `auth.key`. Expected to succeed today, the gap `TODO.md`
+documents; flip it when v2.0's channel lands.
+
+Code: `s20_e2e.py::t384`.
+
+**T-385 — A forged entry opens as genuine today.**
+The server seals a message to the registered `enc_pk`, and the client
+opens it as genuine. Expected today, since sealed boxes are anonymous;
+flip it with v2.0's signed entries.
+
+Code: `s20_e2e.py::t385`.
+
+**T-386 — A peer that ends its lines with `\r\n` works.**
+Telnet style: it completes the handshake and a command.
+
+Code: `s20_e2e.py::t386`.
+
+**T-387 — A stop under load lets clients finish.**
+10 clients in mid session, then `SIGTERM` with `drain_ms` 5000:
+`proto_serve` returns when the last client has quit, and each got `BYE`
+for its `QUIT`. (slow)
+
+Code: `s20_e2e.py::t387`.
+
+**T-388 — The largest message fits, and one byte more does not.**
+With the `PUT ` prefix, the largest plaintext whose sealed line fits,
+`floor((MAX_PAYLOAD - 4) / 4) * 3 - 48` bytes (12582861 at the default,
+12 MiB less 51 bytes), round-trips; one byte more makes the line 4
+characters longer, and the server's `proto_recv_line_dyn_status` reports
+`PROTO_E_LINE_TOO_LONG`. A 16 MiB plaintext is far over: its line is
+about 22.4 MB. Runs on every push in a `MAX_PAYLOAD=4096` build, and
+nightly at the default.
+
+Code: `s20_e2e.py::t388`.
+
+**T-389 — The transcript matches the grammar.**
+A relay between `proto_connect` and `proto_serve` (the registration
+recipe, then `QUIT`) records both directions. Client lines are `HELLO`,
+`AUTH <44> <88>`, `REGISTER <44>` and `QUIT`; server lines are
+`CHALLENGE <44>`, `REGISTER`, `OK`, `BYE` and `FAIL <reason>`, where
+`<n>` is n characters of base64. Every line ends in `\n` alone, with no
+`\r`, and every base64 field uses the standard alphabet with its
+padding.
+
+Code: `s20_e2e.py::t389`.
+
+---
+
+## XXIII. Sanitizers, fuzzing and static analysis
+
+**T-390 — ASan and UBSan find nothing.**
+`-fsanitize=address,undefined -fno-sanitize-recover` over the whole
+suite, on Linux and macOS with clang: no report.
+
+Code: `s21_quality.py::t390`.
+
+**T-391 — LeakSanitizer finds nothing.**
+With every heap result in the suite freed: `proto_recv_line_dyn`,
+`proto_recv_line_dyn_status`, `proto_seal_new`, `proto_unseal_new`,
+`proto_auth_server`.
+
+Code: `s21_quality.py::t391`.
+
+**T-392 — ThreadSanitizer finds nothing in the threaded tests.**
+**Fails today.** Over T-329, T-167, T-035 and T-034, it reports the two
+races of T-330 (observed).
+
+Code: `s21_quality.py::t392`.
+
+**T-393 — Valgrind finds nothing.**
+Memcheck over the client and handshake tests: no invalid read and no use
+of uninitialized memory. (Linux)
+
+Code: `s21_quality.py::t393`.
+
+**T-394 — Fuzz the key-file parser.**
+Each input is written to a temporary file and loaded with
+`proto_load_pubkey_hex` and `proto_load_keys`. Properties: no crash, and
+`PROTO_OK` only when the first line is exactly the canonical base64 of a
+key of the right size (the oracle re-encodes the result and compares it
+with the line). That oracle catches T-143: until it is fixed, the target
+skips inputs with a NUL before the first newline. (fuzz)
+
+Code: `s21_quality.py::t394`.
+
+**T-395 — Fuzz the line readers.**
+Arbitrary bytes into a socketpair, read with `proto_recv_line` (random
+`bufsz`), `proto_recv_line_timeout` (`ms` from 0 to 50) and
+`proto_recv_line_dyn_status` (a `MAX_PAYLOAD=4096` build). Properties:
+no crash; nothing consumed beyond what was returned, its newline and its
+`\r`s, so the rest is intact; `buf` always NUL-terminated. (fuzz)
+
+Code: `s21_quality.py::t395`.
+
+**T-396 — Fuzz the server handshake.**
+Arbitrary client lines into `proto_auth_server`. Properties: no crash;
+never a result other than `NULL` without a valid signature; every line
+sent is a `CHALLENGE` or a documented `FAIL`. (fuzz)
+
+Code: `s21_quality.py::t396`.
+
+**T-397 — Fuzz the client handshake.**
+Arbitrary server lines into `proto_auth_client`. Properties: no crash;
+only documented codes come back. (fuzz)
+
+Code: `s21_quality.py::t397`.
+
+**T-398 — Fuzz `proto_unseal_new`.**
+Arbitrary strings and mutated valid boxes: `NULL`, or the right
+plaintext for the unmutated corpus entries; no crash, no leak. (fuzz)
+
+Code: `s21_quality.py::t398`.
+
+**T-399 — The static analysers find nothing.**
+`clang --analyze` (scan-build) and `gcc -fanalyzer` over all sources: no
+finding, against a baseline recorded first.
+
+Code: `s21_quality.py::t399`.
+
+**T-400 — `cppcheck` finds nothing.**
+`cppcheck --enable=warning,portability,performance` over all sources.
+
+Code: `s21_quality.py::t400`.
+
+**T-401 — Coverage is published, with a floor per file.**
+`llvm-cov` or `gcov` on every run; once the suite exists, a floor per
+file, with the uncovered lines listed in the job summary.
+
+Code: `s21_quality.py::t401`.
+
+**T-402 — The sanitizers run on the 32-bit build too.**
+The sanitizer job of T-390 and T-391, again on the `-m32` build. (Linux)
+
+Code: `s21_quality.py::t402`.
+
+**T-403 — A fortified build passes the suite.**
+`-O2 -D_FORTIFY_SOURCE=3`: no fortify abort. (Linux)
+
+Code: `s21_quality.py::t403`.
+
+**T-404 — The fuzz corpora are kept, and grow with every fix.**
+They live in `testing/corpus/<target>/`; each target runs 60 s on every
+pull request and longer nightly, and an input that crashes is added to
+the corpus with its fix. (fuzz)
+
+Code: `s21_quality.py::t404`.
+
+**T-405 — The library stays silent.**
+Every test runs with stdout and stderr captured, and no library call
+writes a byte to either. A source lint backs it: no `printf`, `fprintf`,
+`puts`, `perror` or `syslog` in the five library sources (`snprintf`
+aside). This is the v1.1 promise that the application decides where
+diagnostics go, and it keeps secrets out of CI logs.
+
+Code: `s21_quality.py::t405`.
+
+**T-406 — The boundary tests are sharp.**
+A nightly mutation job (a tool such as Mull, or a script of `sed` edits)
+alters the boundary expressions, `i + 1 >= bufsz` and `i > MAX_PAYLOAD`
+in `wire.c`, the spare byte of `MAX_PAYLOAD_BUF`,
+`bin_len != expected_len` in `crypto.c`, `ch_len != CHALLENGE_LEN` in
+`auth.c` and the port ranges in `auth.c` and `serve.c`, and the suite
+must fail for every mutant. Optional, and report-only until it is
+stable. (slow)
+
+Code: `s21_quality.py::t406`.

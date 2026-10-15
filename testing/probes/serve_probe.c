@@ -18,7 +18,7 @@
  *   --cycles N --cycle-ms MS   run proto_serve N times, each stopped after MS ms
  *   --after popen|waitpid      what to try once proto_serve has returned
  *
- * Handlers: ok, register, register_once, register_fail, register_okcr,
+ * Handlers: ok, vault, register, register_once, register_fail, register_okcr,
  * register_okextra, register_silent, silent, ok_silent, long_answer, sleep,
  * crash, marker, ctxmod, printf, fds, info, keepalive, child_signals, stopper.
  * All but the ones that fail on purpose send OK and then answer PING, ECHO,
@@ -27,6 +27,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <sys/socket.h>
@@ -193,12 +194,72 @@ static int do_register(int fd) {
     return 1;
 }
 
+/* Close the way an application that answers an oversized line should: say no,
+ * stop writing, and read what is left of the line before closing, so that the
+ * close does not reset the connection and take the answer with it. */
+static void refuse_and_drain(int fd) {
+    shutdown(fd, SHUT_WR);
+    char buf[65536];
+    for (;;) {
+        struct pollfd p = { .fd = fd, .events = POLLIN };
+        if (poll(&p, 1, 5000) <= 0) break;
+        if (read(fd, buf, sizeof buf) <= 0) break;
+    }
+}
+
+/* The vault of the worked example in docs.md, kept in memory: PUT stores a line,
+ * GET returns them all, a line past MAX_PAYLOAD is answered "FAIL message too
+ * large" before the connection closes. */
+static void vault(int fd) {
+    enum { MAX_ENTRIES = 64 };
+    char *entries[MAX_ENTRIES];
+    int n = 0;
+    proto_send_line(fd, "OK");
+    for (;;) {
+        int status = PROTO_OK;
+        char *line = proto_recv_line_dyn_status(fd, &status);
+        if (!line) {
+            if (status == PROTO_E_LINE_TOO_LONG) {
+                proto_send_line(fd, "FAIL message too large");
+                refuse_and_drain(fd);
+            }
+            logf("vault ended status=%d", status);
+            return;
+        }
+        if (!strncmp(line, "PUT ", 4) && n < MAX_ENTRIES) {
+            entries[n++] = strdup(line + 4);
+            char ok[32];
+            snprintf(ok, sizeof ok, "OK %d", n);
+            proto_send_line(fd, ok);
+            logf("vault stored %d", n);
+        } else if (!strcmp(line, "GET")) {
+            char hdr[32];
+            snprintf(hdr, sizeof hdr, "ENTRIES %d", n);
+            proto_send_line(fd, hdr);
+            for (int i = 0; i < n; i++) {
+                char id[16];
+                snprintf(id, sizeof id, "%d ", i + 1);
+                proto_send_prefixed(fd, id, entries[i], strlen(entries[i]));
+            }
+        } else if (!strcmp(line, "QUIT")) {
+            proto_send_line(fd, "BYE");
+            free(line);
+            wait_eof(fd);
+            return;
+        } else {
+            proto_send_line(fd, "FAIL unknown command");
+        }
+        free(line);
+    }
+}
+
 static void handler(int fd, const char *identity, void *ctx) {
     struct cfg *c = ctx;
     const char *h = c->handler;
     logf("handler %s pid=%d", h, (int)getpid());
 
     if (!strcmp(h, "ok")) { proto_send_line(fd, "OK"); command_loop(fd); }
+    else if (!strcmp(h, "vault")) vault(fd);
     else if (!strcmp(h, "register")) {
         if (!do_register(fd)) return;
         proto_send_line(fd, "OK");

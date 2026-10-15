@@ -71,6 +71,9 @@ static void wire(void) {
     int sv[2];
     char buf[64], small[5];
 
+    for (int code = -800; code <= 3; code++)                        /* every code has a message */
+        CHECK(proto_strerror(code) != NULL && *proto_strerror(code) != '\0');
+
     pair(sv);
     put(sv[0], "hello\r\nabcd\n\nabcde\nrest\nlast");
     CHECK_EQ(proto_recv_line(sv[1], buf, sizeof buf), 5);
@@ -363,7 +366,8 @@ static void serve(void) {
         sigemptyset(&sa.sa_mask);
         sigaction(SIGTERM, &sa, NULL);
         proto_serve_opts_t opts = { .bind_addr = "127.0.0.1", .drain_ms = 2000 };
-        _exit(proto_serve(port, allowed, serve_handler, NULL, &opts) == PROTO_OK ? 0 : 1);
+        /* exit() and not _exit(): a coverage build writes its counters at exit */
+        exit(proto_serve(port, allowed, serve_handler, NULL, &opts) == PROTO_OK ? 0 : 1);
     }
 
     proto_conn_t c;
