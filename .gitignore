@@ -27,5 +27,9 @@ core
 *.out
 *.gch
 
+# Test suite: build products and caches
+testing/.build/
+testing/__pycache__/
+
 # Personal folders
 _notes

@@ -1,0 +1,186 @@
+name: CI
+
+# Every push and pull request runs the suite on Linux, macOS and the BSDs, on
+# x86-64 and arm64. Every night it also runs the slow tests, the fuzz targets,
+# the privileged tests, and the Alpine (musl) and 32-bit builds.
+# What each test does is in testing/README.md.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  readme:
+    name: README matches the tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 testing/run.py --check
+
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux x86-64", os: ubuntu-24.04 }
+          - { name: "Linux arm64", os: ubuntu-24.04-arm }
+          - { name: "macOS arm64", os: macos-15 }
+          - { name: "macOS x86-64", os: macos-15-intel }
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang libsodium-dev pkg-config valgrind cppcheck
+          # ThreadSanitizer cannot map memory with Ubuntu's default randomisation.
+          sudo sysctl vm.mmap_rnd_bits=28 || true
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libsodium pkgconf
+
+      - name: Run the tests
+        shell: bash
+        run: |
+          flags="-v"
+          case "${{ github.event_name }}" in
+            schedule) flags="$flags --slow --fuzz --fuzz-seconds 300" ;;
+            pull_request) flags="$flags --fuzz --fuzz-seconds 60" ;;
+          esac
+          python3 testing/run.py $flags
+
+  bsd:
+    name: ${{ matrix.os }} ${{ matrix.version }} ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    # The VMs run under QEMU. The arm64 ones are emulated, so they are slow:
+    # the timing windows are widened and each test gets longer.
+    continue-on-error: ${{ matrix.experimental }}
+    defaults:
+      run:
+        shell: cpa.sh {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: freebsd, version: "15.1", arch: x86-64, slack: "2", experimental: false }
+          - { os: freebsd, version: "15.1", arch: arm64, slack: "4", experimental: false }
+          # Allowed to fail: not every libc has the TCP keepalive knobs wire.c uses.
+          - { os: openbsd, version: "7.9", arch: x86-64, slack: "2", experimental: true }
+          - { os: openbsd, version: "7.9", arch: arm64, slack: "4", experimental: true }
+          - { os: netbsd, version: "11.0", arch: x86-64, slack: "2", experimental: true }
+          - { os: netbsd, version: "11.0", arch: arm64, slack: "4", experimental: true }
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start the ${{ matrix.os }} VM
+        uses: cross-platform-actions/action@v1.6.0
+        with:
+          operating_system: ${{ matrix.os }}
+          version: ${{ matrix.version }}
+          architecture: ${{ matrix.arch }}
+          memory: 4G
+          cpu_count: 2
+          shell: sh
+
+      - name: Install dependencies
+        run: |
+          case "$(uname -s)" in
+            FreeBSD)
+              sudo pkg install -y python3 libsodium pkgconf
+              ;;
+            OpenBSD)
+              sudo pkg_add -I python%3 libsodium
+              if ! command -v python3 >/dev/null 2>&1; then
+                sudo ln -sf "$(ls /usr/local/bin/python3.[0-9]* | head -n 1)" /usr/local/bin/python3
+              fi
+              ;;
+            NetBSD)
+              sudo pkg_add pkgin || true
+              export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH
+              sudo pkgin -y install python312 libsodium pkgconf
+              ;;
+          esac
+
+      - name: Run the tests
+        env:
+          PROTO_TEST_SLACK: ${{ matrix.slack }}
+          PROTO_TEST_TIMEOUT: "300"
+        shell: cpa.sh {0} --environment-variables PROTO_TEST_SLACK PROTO_TEST_TIMEOUT
+        run: |
+          export PATH=/usr/local/bin:/usr/pkg/bin:$PATH
+          python3 testing/run.py -v
+
+  alpine:
+    name: Alpine (musl)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: |
+          docker build -t proto-alpine - <<'EOF'
+          FROM alpine:3.22
+          RUN apk add --no-cache build-base python3 libsodium-dev pkgconf linux-headers valgrind
+          EOF
+      - name: Run the tests as an ordinary user
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/src" -w /src proto-alpine python3 testing/run.py -v --slow
+
+  m32:
+    name: 32-bit build
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install a 32-bit toolchain and libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-multilib libsodium-dev pkg-config curl
+          # libsodium for i386 is not always packaged: build it when it is not.
+          curl -fsSL https://download.libsodium.org/libsodium/releases/libsodium-1.0.20-stable.tar.gz | tar xz
+          (cd libsodium-stable &&
+            ./configure --prefix="$HOME/sodium32" --host=i686-linux-gnu CC="gcc -m32" --disable-shared &&
+            make -j"$(nproc)" && make install)
+      - name: Run the 32-bit tests
+        run: |
+          export SODIUM32_CFLAGS="-I$HOME/sodium32/include" SODIUM32_LIBS="-L$HOME/sodium32/lib -lsodium"
+          python3 testing/run.py -v --id T-019,T-186,T-402
+
+  privileged:
+    name: Privileged tests (root)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # They change the clock, mount filesystems and add firewall rules.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsodium-dev pkg-config nftables iproute2 dosfstools util-linux
+      - name: Run the root tests
+        run: sudo env "PATH=$PATH" python3 testing/run.py -v --slow --tag root
