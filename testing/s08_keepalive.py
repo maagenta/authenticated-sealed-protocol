@@ -24,6 +24,17 @@ def idle_option():
     skip("this Python knows neither TCP_KEEPIDLE nor TCP_KEEPALIVE")
 
 
+def has_knobs():
+    """Whether the system has the three per-socket knobs. OpenBSD has none."""
+    return (any(hasattr(socket, n) for n in ("TCP_KEEPIDLE", "TCP_KEEPALIVE"))
+            and hasattr(socket, "TCP_KEEPINTVL") and hasattr(socket, "TCP_KEEPCNT"))
+
+
+def ok_rc():
+    """What proto_keepalive returns for positive values: PROTO_KEEPALIVE_DEFAULTED where there are no knobs."""
+    return 0 if has_knobs() else 2
+
+
 def knobs(sock):
     return (sock.getsockopt(socket.IPPROTO_TCP, idle_option()),
             sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL),
@@ -48,9 +59,10 @@ def t112():
     """On a TCP socket, the three knobs are set and read back."""
     P = lib.proto()
     c = tcp()
-    eq(P.keepalive(c.fileno(), 10, 5, 3), 0, "proto_keepalive(10, 5, 3)")
+    eq(P.keepalive(c.fileno(), 10, 5, 3), ok_rc(), "proto_keepalive(10, 5, 3)")
     check(keepalive_on(c), "SO_KEEPALIVE is off")
-    eq(knobs(c), (10, 5, 3), "idle, interval and count")
+    if has_knobs():
+        eq(knobs(c), (10, 5, 3), "idle, interval and count")
     for opt in (socket.SO_RCVTIMEO, socket.SO_SNDTIMEO):
         check(c.getsockopt(socket.SOL_SOCKET, opt, 16) == b"\0" * 16, "a socket timeout was set: keepalive is not a read timeout")
 
@@ -149,9 +161,11 @@ def t119():
     """A second call replaces the first."""
     P = lib.proto()
     c = tcp()
-    eq(P.keepalive(c.fileno(), 10, 5, 3), 0, "first call")
-    eq(P.keepalive(c.fileno(), 20, 6, 4), 0, "second call")
-    eq(knobs(c), (20, 6, 4), "the new values hold")
+    eq(P.keepalive(c.fileno(), 10, 5, 3), ok_rc(), "first call")
+    eq(P.keepalive(c.fileno(), 20, 6, 4), ok_rc(), "second call")
+    check(keepalive_on(c), "SO_KEEPALIVE is off")
+    if has_knobs():
+        eq(knobs(c), (20, 6, 4), "the new values hold")
 
 
 def keepalive_of_fd(fd):
@@ -210,9 +224,9 @@ def t121():
         rc, keys = P.load_keys(ident.auth_key, ident.enc_key)
         conn = lib.Conn.new(keys)
         eq(P.connect(conn, "127.0.0.1", srv.port), 0, "proto_connect")
-        eq(P.keepalive(conn.fd, 10, 5, 3), 0, "proto_keepalive on conn.fd")
+        eq(P.keepalive(conn.fd, 10, 5, 3), ok_rc(), "proto_keepalive on conn.fd")
         eq(servers.command(P, conn, "PING"), (4, b"PONG"), "the session carries on")
-        eq(srv.field("keepalive", "rc"), "0", "proto_keepalive on the handler's fd")
+        eq(srv.field("keepalive", "rc"), str(ok_rc()), "proto_keepalive on the handler's fd")
         P.close(conn)
 
 

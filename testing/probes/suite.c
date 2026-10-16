@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -132,7 +133,11 @@ static void wire(void) {
     close(p[0]); close(p[1]);
 
     CHECK_EQ(tcp_pair(sv), 0);                                      /* keepalive on TCP */
+#if defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
     CHECK_EQ(proto_keepalive(sv[0], 10, 5, 3), PROTO_OK);
+#else                                                               /* OpenBSD: no per-socket knobs */
+    CHECK_EQ(proto_keepalive(sv[0], 10, 5, 3), PROTO_KEEPALIVE_DEFAULTED);
+#endif
     CHECK_EQ(proto_keepalive(-1, 10, 5, 3), PROTO_E_KEEPALIVE);
     close(sv[0]); close(sv[1]);
 }

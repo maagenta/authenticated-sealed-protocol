@@ -53,6 +53,7 @@ def t292():
     P = lib.proto()
     port = net.free_port()
     P.serve_stop()                                       # a call that wrongly got going would return
+    P.noop_handler                                       # made now: libffi on OpenBSD holds a descriptor per closure
     scenarios = [
         ("a NULL allowlist, a NULL handler and port 0", dict(port=0, allowed=None, handler=None), -103),
         ("a bad allowlist and a NULL handler", dict(port=port, allowed=b"A" * 64, handler=None), -104),

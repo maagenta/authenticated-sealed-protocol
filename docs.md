@@ -786,7 +786,10 @@ connection fails immediately without waiting for `count` probes.
 
 **Returns** `PROTO_OK`; `PROTO_KEEPALIVE_DEFAULTED` (a positive value, not a
 failure) if probing is on but a timing knob was rejected and kept the system
-value; `PROTO_E_KEEPALIVE` if the socket refused probing altogether.
+value; `PROTO_E_KEEPALIVE` if the socket refused probing altogether. OpenBSD
+has no per-socket timing knobs (they are system-wide, under
+`sysctl net.inet.tcp`), so there any positive knob gives
+`PROTO_KEEPALIVE_DEFAULTED`.
 
 **Not a read timeout.** This is a backstop against blocking forever, not a way
 to give up promptly — it says nothing about how long *you* wait for a reply.

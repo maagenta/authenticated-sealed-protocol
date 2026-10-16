@@ -552,6 +552,8 @@ Code: `s01_build.py::t017`.
 the globals (`stop_asked`, `stop_fd`, `in_child`, `wake`). The library
 is compiled into the application, so an exported helper is a link
 collision waiting to happen.
+OpenBSD's file symbols (`F`) and the `__retguard_*` cookies its clang adds
+to every function are not counted: they are not names the code chose.
 
 Code: `s01_build.py::t018`.
 
@@ -1203,7 +1205,9 @@ Code: `s07_dyn.py::t111`. Also run in every framing build by T-011.
 `getsockopt` reads back `SO_KEEPALIVE == 1` and 10, 5 and 3 through the
 idle knob of the platform (`TCP_KEEPIDLE` on Linux, `TCP_KEEPALIVE` on
 macOS), `TCP_KEEPINTVL` and `TCP_KEEPCNT`. `SO_RCVTIMEO` and
-`SO_SNDTIMEO` stay zero: keepalive is not a read timeout.
+`SO_SNDTIMEO` stay zero: keepalive is not a read timeout. OpenBSD has no
+per-socket knobs, so there it returns `PROTO_KEEPALIVE_DEFAULTED` with
+`SO_KEEPALIVE == 1`, and nothing is read back.
 
 Code: `s08_keepalive.py::t112`.
 
@@ -1248,7 +1252,7 @@ Code: `s08_keepalive.py::t118`.
 
 **T-119 — A second call replaces the first.**
 Called again on the same fd with other values, it returns `PROTO_OK` and
-the new values hold.
+the new values hold (`PROTO_KEEPALIVE_DEFAULTED` on OpenBSD, as in T-112).
 
 Code: `s08_keepalive.py::t119`.
 
@@ -1263,7 +1267,8 @@ Code: `s08_keepalive.py::t120`.
 
 **T-121 — Where `docs.md` says to call it, it works.**
 On `conn.fd` after `proto_connect` and on the handler's fd, it returns
-`PROTO_OK` and the session carries on.
+`PROTO_OK` (`PROTO_KEEPALIVE_DEFAULTED` on OpenBSD, as in T-112) and the
+session carries on.
 
 Code: `s08_keepalive.py::t121`.
 

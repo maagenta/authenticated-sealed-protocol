@@ -342,6 +342,10 @@ def nm_symbols(obj):
             name = name[1:]
         if kind in ("U", "u", "w", "v"):
             undefined.append(name)
+        elif kind == "F" or name.startswith("__retguard_"):
+            # OpenBSD: the name of the source file, and the cookies that clang's
+            # -fret-protector adds per function, hidden and never linked against.
+            continue
         elif len(kind) == 1 and kind.isalpha() and kind.isupper():
             defined.append(name)
     return defined, undefined
