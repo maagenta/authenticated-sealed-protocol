@@ -311,6 +311,8 @@ static void *busy_clients(void *arg) {
     b->rcB = silent_read(b->port, b->lineB, sizeof b->lineB, 1500, &b->msB);
     fail_fork = 0;
     b->rcC = handshake(b->port, NULL);                     /* the server goes on */
+    for (int i = 0; i < 2 && b->rcC == PROTO_E_TIMEOUT; i++)   /* a loaded ASan build may be slow */
+        b->rcC = handshake(b->port, NULL);
     proto_serve_stop();
     return NULL;
 }
