@@ -31,5 +31,8 @@ core
 testing/.build/
 testing/__pycache__/
 
+# Graphify
+graphify_out
+
 # Personal folders
 _notes
