@@ -44,10 +44,32 @@ static int write_all(int fd, const void *buf, size_t n) {
     return PROTO_OK;
 }
 
-int proto_send_line(int fd, const char *line) {
-    int rc = write_all(fd, line, strlen(line));
-    if (rc != PROTO_OK) return rc;
+/* Send <a><b>\n, in one write when it fits a small stack buffer. Sent apart,
+ * the newline is a second small segment, and Nagle's algorithm holds it
+ * until the peer acknowledges the first; a peer that delays its ACK (NetBSD
+ * does, by up to 200 ms) stalls the line that long, and the answer comes
+ * back the same way. Every exchange then costs two delayed ACKs, which is
+ * what made proto_close wait out QUIT_TIMEOUT_MS on NetBSD for a BYE sent
+ * at once. Longer lines fill whole segments and go out in parts, with no
+ * intermediate allocation. */
+#define ONE_WRITE_MAX 4096
+
+static int write_line(int fd, const char *a, size_t an, const char *b, size_t bn) {
+    if (an < ONE_WRITE_MAX && bn < ONE_WRITE_MAX - an) {
+        char buf[ONE_WRITE_MAX];
+        if (an) memcpy(buf, a, an);
+        if (bn) memcpy(buf + an, b, bn);
+        buf[an + bn] = '\n';
+        return write_all(fd, buf, an + bn + 1);
+    }
+    int rc;
+    if ((rc = write_all(fd, a, an)) != PROTO_OK) return rc;
+    if ((rc = write_all(fd, b, bn)) != PROTO_OK) return rc;
     return write_all(fd, "\n", 1);
+}
+
+int proto_send_line(int fd, const char *line) {
+    return write_line(fd, line, strlen(line), "", 0);
 }
 
 /* Read up to n bytes of the current line into buf, never past its newline.
@@ -240,10 +262,7 @@ char *proto_recv_line_dyn_status(int fd, int *status) {
 
 int proto_send_prefixed(int fd, const char *prefix,
                         const char *body, size_t body_len) {
-    int rc;
-    if ((rc = write_all(fd, prefix, strlen(prefix))) != PROTO_OK) return rc;
-    if ((rc = write_all(fd, body, body_len))         != PROTO_OK) return rc;
-    return write_all(fd, "\n", 1);
+    return write_line(fd, prefix, strlen(prefix), body, body_len);
 }
 
 int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {

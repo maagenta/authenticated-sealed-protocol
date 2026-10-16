@@ -528,7 +528,7 @@ what most callers do.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `bind_addr` | `NULL` (every interface) | IPv4 address to listen on, as a dotted literal such as `"127.0.0.1"` or `"10.0.0.5"`. No name resolution; anything `inet_pton` rejects fails `proto_serve` with `PROTO_E_BAD_ADDRESS` before the port is touched. |
+| `bind_addr` | `NULL` (every interface) | IPv4 address to listen on, as a dotted literal such as `"127.0.0.1"` or `"10.0.0.5"`. No name resolution; anything but digits and dots, and anything `inet_pton` rejects, fails `proto_serve` with `PROTO_E_BAD_ADDRESS` before the port is touched. |
 | `drain_ms` | `0` (no wait) | Once [`proto_serve_stop`](#proto_serve_stop) is called, how long `proto_serve` waits for the connections in progress before it returns, in milliseconds; it returns sooner if the last one ends first. A connection still open when the time runs out is left running. Keep it below your supervisor's grace period — Docker allows 10 s, systemd 90 s by default — or the wait ends in `SIGKILL`. A negative value fails `proto_serve` with `PROTO_E_PARAM` before the port is touched. |
 
 **Always use a designated initializer.** It zeroes every field you do not
@@ -733,8 +733,8 @@ int proto_send_prefixed(int fd, const char *prefix,
                         const char *body, size_t body_len);
 ```
 
-Write `<prefix><body>\n` in three writes, without assembling an intermediate
-buffer — the standard way to send `VERB <big_base64_payload>`.
+Write `<prefix><body>\n` without allocating: in one write when it is under
+4 KiB, in three otherwise — the standard way to send `VERB <big_base64_payload>`.
 
 | Param | Description |
 |---|---|

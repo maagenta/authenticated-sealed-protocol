@@ -117,9 +117,13 @@ int proto_serve(int port, const char *allowed_hex,
     /* Parse the bind address up front, with the other caller mistakes: a
      * typo in a config file should fail here, not after the port is half
      * set up. NULL opts, or a NULL field, means the default. */
+    /* Only digits and dots get as far as inet_pton: NetBSD's stops at the
+     * first space and accepts the rest, so "127.0.0.1\n" read from a config
+     * file, or "127.0.0.1 junk", would bind there and nowhere else. */
     struct in_addr bind_addr = { .s_addr = htonl(INADDR_ANY) };
     if (opts && opts->bind_addr
-        && inet_pton(AF_INET, opts->bind_addr, &bind_addr) != 1)
+        && (opts->bind_addr[strspn(opts->bind_addr, "0123456789.")] != '\0'
+            || inet_pton(AF_INET, opts->bind_addr, &bind_addr) != 1))
         return PROTO_E_BAD_ADDRESS;
     /* A negative wait means nothing here. Read as 0 it would hide the
      * mistake, and -1 is not "forever" as it is for poll(): refuse it. */
