@@ -252,7 +252,11 @@ SANITIZE = {
 
 
 def sanitizer_works(kind):
-    """Whether this compiler can build and run a program with that sanitizer."""
+    """Whether this compiler can build and run a program with that sanitizer.
+
+    For ThreadSanitizer, also whether it reports a race it cannot miss: NetBSD
+    builds and runs -fsanitize=thread programs that never report anything, and
+    there a clean run would turn every TSan finding into an XPASS."""
     key = "san-" + kind
     cached = _san_cache.get(key)
     if cached is not None:
@@ -268,6 +272,26 @@ def sanitizer_works(kind):
     if ok:
         rc, _ = run([exe], timeout=30, env=dict(os.environ, **san_env(kind)))
         ok = rc == 0
+    if ok and kind == "tsan":
+        racy = os.path.join(d, "race.c")
+        with open(racy, "w") as f:
+            f.write("#include <pthread.h>\n"
+                    "int x;\n"
+                    "static void *bump(void *a) { x++; return a; }\n"
+                    "int main(void) {\n"
+                    "    pthread_t t;\n"
+                    "    if (pthread_create(&t, 0, bump, 0) != 0) return 1;\n"
+                    "    x++;\n"
+                    "    pthread_join(t, 0);\n"
+                    "    return 0;\n"
+                    "}\n")
+        exe = os.path.join(d, "race-tsan")
+        rc, _ = run([cc()] + SANITIZE[kind] + ["-pthread", "-o", exe, racy])
+        if rc == 0:
+            rc, out = run([exe], timeout=30, env=dict(os.environ, **san_env(kind)))
+            ok = "WARNING: ThreadSanitizer: data race" in out
+        else:
+            ok = False
     _san_cache[key] = ok
     return ok
 

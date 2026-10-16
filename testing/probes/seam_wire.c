@@ -225,7 +225,10 @@ static void big_line_on(int sv[2], const char *what) {
     CHECK(memcmp(buf, line, n) == 0);
     unsigned long calls = recv_calls + read_calls;
     fprintf(stderr, "%s: %lu calls\n", what, calls);
-    if (calls >= 1000) FAILF("%s: %lu system calls for a 1 MiB line", what, calls);
+    /* One recv and one read per piece the socket holds. NetBSD hands a waiting
+     * reader a socketpair's bytes one 2 KiB mbuf cluster at a time: ~1026 calls.
+     * One byte at a time would be over a million. */
+    if (calls >= 4096) FAILF("%s: %lu system calls for a 1 MiB line", what, calls);
     free(line); free(buf);
 }
 

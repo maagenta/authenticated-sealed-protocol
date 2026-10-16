@@ -25,6 +25,15 @@ AUTH_SEAMS = {
 SERVE_SEAMS = {"serve.c": ["-Dsocket=seam_socket", "-Dsocketpair=seam_socketpair", "-Dlisten=seam_listen",
                            "-Daccept=seam_accept", "-Dfork=seam_fork", "-Dpoll=seam_poll"]}
 
+# NetBSD declares socket() with __RENAME(__socket30), an asm label that -Dsocket
+# does not touch: the renamed declaration still links to the real socket(). The
+# label is macro-expanded, so renaming __socket30 too points it at the seam.
+if harness.PLATFORM == "netbsd":
+    for _seams in (AUTH_SEAMS, SERVE_SEAMS):
+        for _src, _flags in _seams.items():
+            if "-Dsocket=seam_socket" in _flags:
+                _flags.append("-D__socket30=seam_socket")
+
 # The calls crypto.c makes that seam_crypto.c takes over.
 CRYPTO_SEAMS = {"crypto.c": ["-Dread=seam_read", "-Dopen=seam_open", "-Dmalloc=seam_malloc",
                              "-Dfree=seam_free", "-Dsodium_memzero=spy_memzero"]}

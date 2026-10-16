@@ -935,9 +935,10 @@ Code: `s05_recv.py::t072`.
 
 **T-073 — On a socket, a large line costs a few calls, not one per byte.**
 A 1 MiB line costs one `recv` and one `read` per piece the socket holds:
-34 calls over TCP loopback, and 258 on a macOS socketpair, whose buffer
-is 8 KiB (both observed, the line intact). Gate at fewer than 1000
-calls, against 1048577 one byte at a time. Counting calls is
+34 calls over TCP loopback, 258 on a macOS socketpair, whose buffer
+is 8 KiB, and 1026 on a NetBSD socketpair, which wakes the reader for
+every 2 KiB mbuf cluster (all observed, the line intact). Gate at fewer
+than 4096 calls, against 1048577 one byte at a time. Counting calls is
 deterministic where timing is not, so this protects the v1.1 speed-up
 (1.2 s to 3 ms) without a clock. The line is 16 times `READ_CHUNK`, so
 it also checks, byte for byte, a line assembled across chunks. (seam)
