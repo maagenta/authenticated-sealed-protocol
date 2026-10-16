@@ -88,7 +88,13 @@ def t333():
     eq(starts(P, net.free_port()), 0, "the first call")
     P.serve_stop()                                      # after it returned
     t0 = net.now()
-    eq(serve_call(P, net.free_port()), 0, "the next call")
+    # A port the probe just handed out can still be taken by another process on a
+    # busy runner (PROTO_E_PORT_IN_USE): such a port says nothing here, so another one is tried.
+    for _ in range(5):
+        rc = serve_call(P, net.free_port())
+        if rc != -505:
+            break
+    eq(rc, 0, "the next call")
     check(net.ms_since(t0) < 500 + slack_ms(500), "it waited for another stop")
 
 
