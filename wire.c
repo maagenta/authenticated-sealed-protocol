@@ -265,9 +265,20 @@ int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {
     int rc = PROTO_OK;
     if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, idle_opt,
                                  &idle_s, sizeof idle_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+    /* OpenBSD has no TCP_KEEPINTVL or TCP_KEEPCNT: the knobs are left at the
+     * system default there, which is the same best-effort outcome as a
+     * rejected setsockopt(). */
+#ifdef TCP_KEEPINTVL
     if (intvl_s > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL,
                                   &intvl_s, sizeof intvl_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#else
+    if (intvl_s > 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#endif
+#ifdef TCP_KEEPCNT
     if (count > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,
                                 &count, sizeof count) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#else
+    if (count > 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#endif
     return rc;
 }
