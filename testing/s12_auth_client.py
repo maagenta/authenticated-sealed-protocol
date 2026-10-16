@@ -243,8 +243,12 @@ def t225():
             peer.recv_line()
             try:
                 peer.send(b"CHALLENGE " + b"A" * (n - 10) + b"\n")
-            except (BrokenPipeError, ConnectionResetError):
-                pass              # the client hangs up as soon as it sees the line is too long
+            except OSError:
+                # The client hangs up as soon as it sees the line is too long. The
+                # error for a send to a hung-up peer varies by platform (on macOS
+                # it is ENOTCONN, not EPIPE), so any OSError here means the peer
+                # has gone.
+                pass
             peer.recv_line()
         return server
     eq(run(long_line(16384))[0], TOO_LONG, "a line of 16384 characters")

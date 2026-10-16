@@ -267,7 +267,10 @@ static void accept_emfile(void) {
         if (h.fd >= 0) close(h.fd);
         unsigned long calls = accept_calls;
         fprintf(stderr, "errno %d: %lu accept calls in %.0f ms\n", errs[i], calls, took);
-        CHECK(calls >= 6 && calls <= 16);                  /* about every 100 ms, not a busy loop */
+        /* about every 100 ms, not a busy loop. The lower bound is loose: the 100 ms
+         * nanosleep overshoots on a loaded runner (macOS x86-64 under ASan saw 5 calls
+         * in 1499 ms), so it only separates "backs off" from "stuck". */
+        CHECK(calls >= 3 && calls <= 16);
         CHECK(took < 1350 + 800);                          /* and a stop still ends it */
     }
 }
