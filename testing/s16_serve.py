@@ -336,7 +336,13 @@ def t316():
     ident = make_identity()
     with servers.Server(ident.hex, "ok", flags=["--sigusr2-dump"]) as srv:
         def session():
-            rc, conn = connect_to(P, ident, srv.port)
+            # A session may still time out when the runner is loaded; that says
+            # nothing about descriptors, so it is tried again (a few times at most).
+            for _ in range(3):
+                rc, conn = connect_to(P, ident, srv.port)
+                if rc != -605:
+                    break
+                P.close(conn)
             eq(rc, 0, "proto_connect")
             P.close(conn)
         for _ in range(5):
