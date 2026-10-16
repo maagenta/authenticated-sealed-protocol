@@ -372,6 +372,9 @@ def t317():
 @case("T-318", FINDING)
 def t318():
     """What a handler prints reaches its destination."""
+    import suite
+    if "musl" in suite.libc_name():
+        skip("musl: the handler's printf is flushed before _exit, so there is no finding")
     P = lib.proto()
     ident = make_identity()
     with servers.Server(ident.hex, "printf") as srv:

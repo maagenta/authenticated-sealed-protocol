@@ -26,6 +26,15 @@ def libc_signal():
     return c
 
 
+
+def privileged_port_restricted():
+    """True when ordinary users cannot bind port 1 (ip_unprivileged_port_start > 1)."""
+    try:
+        with open("/proc/sys/net/ipv4/ip_unprivileged_port_start") as f:
+            return int(f.read()) > 1
+    except (OSError, ValueError):
+        return False
+
 @case("T-348", FINDING)
 def t348():
     """The child reaper is removed when proto_serve returns."""
@@ -96,7 +105,9 @@ def t351():
         "PROTO_E_PORT_IN_USE": lambda: serve_call(P, held.getsockname()[1]),
         "PROTO_E_BIND": lambda: serve_call(P, net.free_port(), bind=b"192.0.2.1"),
     }
-    if PLATFORM == "linux" and os.geteuid() != 0:
+    # Port 1 binds (no EACCES) when the kernel lets unprivileged users bind every port,
+    # as on the Alpine container job, so the case needs a restricted port range.
+    if PLATFORM == "linux" and os.geteuid() != 0 and privileged_port_restricted():
         after["PROTO_E_PERM_DENIED"] = lambda: serve_call(P, 1)
     for name, call in after.items():
         eq(outcome(call), ("exit", 3), "SIGPIPE ignored (1) and a SIGCHLD handler (2) after " + name)

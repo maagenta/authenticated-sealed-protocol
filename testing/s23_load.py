@@ -205,11 +205,13 @@ def t418():
     ident = make_identity()
     flood, peak, watching = [], [0], threading.Event()
     shed, lock = collections.Counter(), threading.Lock()
+    opened_at = []
     with servers.Server(ident.hex, "ok", variant="default") as srv:
         def watch():
+            # One ps per second: each poll forks ps, and that competes with the flood on 2-core runners.
             while not watching.is_set():
                 peak[0] = max(peak[0], len(srv.live_children()))
-                watching.wait(0.2)
+                watching.wait(1.0)
         watcher = threading.Thread(target=watch)
         watcher.daemon = True
         watcher.start()
@@ -232,14 +234,30 @@ def t418():
                     continue
                 with lock:
                     flood.append(s)
+                    opened_at.append(time.monotonic())
                 n -= 1
         t0 = time.monotonic()
-        open_some(500)
+        # Several openers, so the flood is open well inside HANDSHAKE_TIMEOUT_MS on slow runners: the
+        # first children must still be alive when the last connection arrives.
+        openers = [threading.Thread(target=open_some, args=(n,)) for n in (125, 125, 125, 125)]
+        for t in openers:
+            t.start()
+        for t in openers:
+            t.join()
         eq(len(flood), 500, "silent connections opened")
         opened_in = time.monotonic() - t0
-        check(net.wait_until(lambda: len(srv.live_children()) >= 450, 30),
-              "only %d children for 500 silent connections (at most %d seen, %.1f s to open them, the kernel shed %s; "
-              "the server's log: %s)" % (len(srv.live_children()), peak[0], opened_in, dict(shed), srv.log()[-3:]))
+        # A child lives HANDSHAKE_TIMEOUT_MS. Connections older than that have already drained, so on a slow
+        # runner (a 2-core box took 18 s to open the flood) the server can only hold the ones still inside
+        # the window. Require most of those, not a fixed 450, and sample the peak while the flood is open.
+        end = time.monotonic()
+        window = sum(1 for t in opened_at if end - t < drain_s - 1.0)
+        needed = min(450, int(0.6 * window))
+        net.wait_until(lambda: len(srv.live_children()) >= needed, 5)
+        peak[0] = max(peak[0], len(srv.live_children()))
+        check(peak[0] >= needed,
+              "only %d children at most for 500 silent connections (%d still inside the %.0f s window, %.1f s to open "
+              "them, the kernel shed %s; the server's log: %s)" % (peak[0], window, drain_s, opened_in, dict(shed),
+                                                                 srv.log()[-3:]))
         # Served during the flood, later perhaps; refused by the server, never. A connection the kernel sheds
         # is asked for again, as a client would.
         attempts, rc = 0, None
@@ -660,7 +678,7 @@ def t422():
                 next_stop += 7
         for t in threads:
             t.finish(60)
-        eq(srv.proc.poll(), None, "the server is still running (its exit status)")
+        eq(srv.proc.poll(), None, "the server is still running (its exit status; the log's tail: %s)" % srv.log()[-6:])
         check(net.wait_until(lambda: not srv.children(), 30), "children left after the soak: %s" % srv.children())
         fds, mem = len(srv.dump_fds()), memory_kb(srv.pid)
         cycles = [int(l.split("open_fds=")[1]) for l in srv.grep("cycle ")]

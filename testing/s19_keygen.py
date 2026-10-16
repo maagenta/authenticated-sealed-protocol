@@ -249,7 +249,9 @@ def t365():
 def t366():
     """A full disk removes the partial file."""
     with Mount("tmpfs") as d:
-        with open(os.path.join(d, "filler"), "wb") as f:
+        # buffering=0: no buffered tail is left for the close in the with-exit to flush, since that
+        # close raises ENOSPC on the full tmpfs (seen on the privileged CI job).
+        with open(os.path.join(d, "filler"), "wb", buffering=0) as f:
             try:
                 while True:
                     f.write(b"x" * 4096)
