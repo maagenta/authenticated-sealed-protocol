@@ -241,7 +241,10 @@ def t225():
     def long_line(n):
         def server(peer):
             peer.recv_line()
-            peer.send(b"CHALLENGE " + b"A" * (n - 10) + b"\n")
+            try:
+                peer.send(b"CHALLENGE " + b"A" * (n - 10) + b"\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass              # the client hangs up as soon as it sees the line is too long
             peer.recv_line()
         return server
     eq(run(long_line(16384))[0], TOO_LONG, "a line of 16384 characters")

@@ -370,16 +370,17 @@ def t250():
     P = lib.proto()
     ident = make_identity()
 
+    gap = 0.1 * max(1.0, harness.SLACK)   # the deadline is stretched by SLACK, so is the trickle
     def client(peer):
         try:
             for ch in b"HELLO\n":
                 peer.send(bytes([ch]))
-                time.sleep(0.1)
+                time.sleep(gap)
         except OSError:
             pass
         return peer.recv_line(2)
     got, _, took = serve_one(client, ident.hex, P)
-    eq(got, None, "a client sending HELLO a byte every 100 ms")
+    eq(got, None, "a client sending HELLO a byte every %d ms" % (gap * 1000))
     check(net.in_window(took, P.macros["HANDSHAKE_TIMEOUT_MS"]), "the server gave up after %.0f ms" % took)
 
 

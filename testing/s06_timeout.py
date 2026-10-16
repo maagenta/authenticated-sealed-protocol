@@ -108,12 +108,17 @@ def t086():
     time.sleep(0.05)
     eq(P.recv_line_timeout(f.fd, 0)[0], -605, "ms == 0 with a line waiting")
     # ms == 1 reads it; a millisecond tick between two clock reads may still
-    # time it out, and nothing is consumed then, so try again.
+    # time it out. Where READ_CHUNK is shorter than the line, the timeout can
+    # fall after the first chunk: the bytes consumed come back in text and are
+    # not returned again, so they are put together.
+    got = b""
     for attempt in range(5):
         rc, text = P.recv_line_timeout(f.fd, 1)
+        got += text
         if rc != -605:
             break
-    eq((rc, text), (4, b"line"), "ms == 1 reads the line that ms == 0 left")
+    check(rc >= 0 and got == b"line",
+          "ms == 1 reads the line that ms == 0 left: got (%d, %r), want the line" % (rc, got))
 
 
 @case("T-087", variant_safe=True)
