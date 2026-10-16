@@ -80,9 +80,13 @@ def t084():
     """Nor do signals cut the deadline short."""
     P = lib.proto()
     a, b = net.sockpair()
+    # The clock starts before the sender does: its 150 ms sleep then lies inside
+    # what is measured, however slowly a loaded or emulated host starts the thread.
+    t0 = net.now()
     sender = net.Worker(lambda: (time.sleep(0.15), a.sendall(b"on time\n")))
     with net.SignalStorm(signal.SIGUSR1, 0.01):
-        rc, text, took = timed(P, b.fileno(), 1000)
+        rc, text = P.recv_line_timeout(b.fileno(), 1000)
+    took = net.ms_since(t0)
     sender.finish()
     eq((rc, text), (7, b"on time"), "proto_recv_line_timeout under signals")
     check(took >= 140, "returned after %.0f ms, before the line was sent" % took)
