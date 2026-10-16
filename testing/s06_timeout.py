@@ -70,7 +70,9 @@ def t083():
         rc, text, took = timed(P, b.fileno(), 300)
     eq(rc, -605, "proto_recv_line_timeout under signals")
     window(took, 300, "the deadline under signals")
-    check(storm.sent > 5, "only %d signals were sent" % storm.sent)
+    # The storm is a thread that a loaded runner may starve for a while: a few
+    # signals landing inside the wait is what the test needs, not a rate.
+    check(storm.sent >= 2, "only %d signals were sent" % storm.sent)
 
 
 @case("T-084", variant_safe=True)
