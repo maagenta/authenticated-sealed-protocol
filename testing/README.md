@@ -36,13 +36,13 @@ Roman numerals of the sections are cosmetic.
 - every fix and feature `RELEASE_NOTES.md` describes for v1.1 and v1.2 (the
   table at the end of this file).
 
-Of the 425 tests, 354 are guards, 33 are findings and 38 are pins
+Of the 425 tests, 355 are guards, 32 are findings and 38 are pins
 (the verdicts are explained below). The findings are listed under
 [Tests that fail today](#tests-that-fail-today).
 
 | Section | Tests | Guards | Findings | Pins |
 |---|---|---|---|---|
-| I. Build, configuration and headers | 25 | 20 | 3 | 2 |
+| I. Build, configuration and headers | 25 | 21 | 2 | 2 |
 | II. `proto_strerror` and the status codes | 9 | 8 | 0 | 1 |
 | III. `proto_init` | 2 | 2 | 0 | 0 |
 | IV. `proto_send_line`, `proto_send_prefixed` | 15 | 11 | 2 | 2 |
@@ -68,7 +68,7 @@ Of the 425 tests, 354 are guards, 33 are findings and 38 are pins
 | XXIV. Documentation and source-level invariants | 10 | 6 | 4 | 0 |
 | XXV. Load and soak | 7 | 7 | 0 | 0 |
 | XXVI. Found by the fuzz targets | 2 | 0 | 2 | 0 |
-| **Total** | **425** | **354** | **33** | **38** |
+| **Total** | **425** | **355** | **32** | **38** |
 
 ## Running the tests
 
@@ -524,12 +524,10 @@ together with T-015.
 Code: `s01_build.py::t014`.
 
 **T-015 — `wire.c` compiles under `-D_POSIX_C_SOURCE=200809L` on macOS.**
-**Fails today.** A consuming project that builds with that flag cannot
-compile `wire.c`: `TCP_KEEPALIVE` is hidden by the feature macro, and
-`TCP_KEEPIDLE` does not exist there (observed). `auth.c` and `serve.c`
-compile under the same flag (observed). Fix: `_DARWIN_C_SOURCE`, or skip
-the idle knob when neither constant is visible; record glibc and musl as
-well. Decided together with T-014. (macOS)
+**Fixed.** `wire.c` used to fail under that flag: `TCP_KEEPALIVE` is hidden
+by the feature macro. `proto_keepalive` now treats a hidden idle knob as a
+rejected `setsockopt()` (`PROTO_KEEPALIVE_DEFAULTED`), so the sources compile
+under the same flag. (macOS)
 
 Code: `s01_build.py::t015`.
 

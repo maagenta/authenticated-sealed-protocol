@@ -263,7 +263,7 @@ def t014():
     check(not problems, "%d dialect builds fail, e.g. %s" % (len(problems), problems[0] if problems else ""))
 
 
-@case("T-015", FINDING, tags=("macos",), finding_on=("macos",))
+@case("T-015", tags=("macos",))
 def t015():
     """wire.c compiles under -D_POSIX_C_SOURCE=200809L on macOS."""
     flag = ["-D_POSIX_C_SOURCE=200809L"]
