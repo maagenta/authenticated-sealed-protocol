@@ -254,17 +254,20 @@ int proto_keepalive(int fd, int idle_s, int intvl_s, int count) {
     /* Systems spell the idle knob differently; the other two agree. Test for
      * the constant rather than the platform: Linux, FreeBSD and NetBSD have
      * TCP_KEEPIDLE, macOS has TCP_KEEPALIVE. */
-#ifdef TCP_KEEPIDLE
-    const int idle_opt = TCP_KEEPIDLE;
-#else
-    const int idle_opt = TCP_KEEPALIVE;
-#endif
-
     /* Timing is best-effort: a rejected knob leaves the connection probing at
-     * the system default rather than not probing at all. */
+     * the system default rather than not probing at all. A system that has
+     * no idle knob at all (or hides it under a strict -D_POSIX_C_SOURCE)
+     * counts as a rejected knob. */
     int rc = PROTO_OK;
-    if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, idle_opt,
+#if defined(TCP_KEEPIDLE)
+    if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,
                                  &idle_s, sizeof idle_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#elif defined(TCP_KEEPALIVE)
+    if (idle_s > 0 && setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE,
+                                 &idle_s, sizeof idle_s) != 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#else
+    if (idle_s > 0) rc = PROTO_KEEPALIVE_DEFAULTED;
+#endif
     /* OpenBSD has no TCP_KEEPINTVL or TCP_KEEPCNT: the knobs are left at the
      * system default there, which is the same best-effort outcome as a
      * rejected setsockopt(). */
