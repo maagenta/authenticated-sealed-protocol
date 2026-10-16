@@ -3,7 +3,7 @@
  * auth.c is compiled with
  *     -Dgetaddrinfo=seam_getaddrinfo -Dfreeaddrinfo=seam_freeaddrinfo -Dsocket=seam_socket
  *     -Dconnect=seam_connect -Dgetsockopt=seam_getsockopt -Dclose=seam_close
- *     -Dstrdup=seam_strdup -Dmalloc=seam_malloc -Dfree=seam_free
+ *     -Dpoll=seam_poll -Dstrdup=seam_strdup -Dmalloc=seam_malloc -Dfree=seam_free
  * and wire.c with -Dsend=seam_send, so that every one of these calls lands here.
  *
  *   seam_auth server_alloc    T-252  a failed strdup or malloc is answered with FAIL internal error
@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -124,6 +125,20 @@ int seam_getsockopt(int fd, int level, int name, void *val, socklen_t *len) {
         return 0;
     }
     return getsockopt(fd, level, name, val, len);
+}
+
+/* An address that never answers is a socket that never becomes writable, and a pipe stands for it.
+ * Not everywhere does it stay silent: a BSD pipe is writable at both ends, so poll() says "connected"
+ * at once. The descriptors of a silent address are therefore answered here: wait out the time asked
+ * for and report nothing. */
+int seam_poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    if (nfds == 1 && fds[0].fd >= 0 && fds[0].fd < 1024 && fd_kind[fds[0].fd] == K_SILENT) {
+        if (timeout > 0)
+            nanosleep(&(struct timespec){ timeout / 1000, (long)(timeout % 1000) * 1000000L }, NULL);
+        fds[0].revents = 0;
+        return 0;
+    }
+    return poll(fds, nfds, timeout);
 }
 
 int seam_close(int fd) {

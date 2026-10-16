@@ -360,8 +360,11 @@ def t150():
     d = harness.tmpdir("nofile")
     ident = make_identity(d)
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    top = max(net.open_fds()) + 1
-    resource.setrlimit(resource.RLIMIT_NOFILE, (top, hard))
+    # open() takes the lowest free number, so the limit goes there: a hole below the highest descriptor
+    # in use (a runner that closed one) would otherwise leave room for the key file.
+    held = set(net.open_fds())
+    lowest_free = next(n for n in range(len(held) + 1) if n not in held)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (lowest_free, hard))
     eq(pubkey_rc(P, ident.auth_pub), OPEN, "a key file with no descriptor to open it")
 
 

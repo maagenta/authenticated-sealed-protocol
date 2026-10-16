@@ -57,11 +57,13 @@ def cc_version(compiler=None):
     compiler = compiler or cc()
     if compiler not in _cc_version:
         rc, out = run([compiler, "--version"])
-        _cc_version[compiler] = out.strip().splitlines()[0] if out.strip() else "?"
+        _cc_version[compiler] = out.strip() if out.strip() else "?"
     return _cc_version[compiler]
 
 
 def cc_family(compiler=None):
+    """'clang', 'gcc' or 'other', from everything `--version` prints: a gcc called cc says only
+    "cc (Ubuntu ...)" on its first line and names the Free Software Foundation on the next."""
     v = cc_version(compiler).lower()
     if "clang" in v:
         return "clang"
@@ -172,7 +174,14 @@ def _compile_all(out, steps):
 
 # ---------------------------------------------------------- build variants
 
-FAST = ["-DHANDSHAKE_TIMEOUT_MS=300", "-DQUIT_TIMEOUT_MS=200", "-DCONNECT_TIMEOUT_MS=500"]
+def _slow_hosts(ms):
+    """A timeout of the fast build, stretched by PROTO_TEST_SLACK: on an emulated machine a handshake
+    that takes a moment must not be a timeout. The tests read the values from the build."""
+    return int(ms * max(1.0, harness.SLACK))
+
+
+FAST = ["-DHANDSHAKE_TIMEOUT_MS=%d" % _slow_hosts(300), "-DQUIT_TIMEOUT_MS=%d" % _slow_hosts(200),
+        "-DCONNECT_TIMEOUT_MS=%d" % _slow_hosts(500)]
 
 VARIANTS = {
     "default": [],
@@ -184,7 +193,8 @@ VARIANTS = {
     "pay64c1": FAST + ["-DMAX_PAYLOAD=64", "-DREAD_CHUNK=1"],
     "pay64c3": FAST + ["-DMAX_PAYLOAD=64", "-DREAD_CHUNK=3"],
     "min": ["-DHANDSHAKE_TIMEOUT_MS=1", "-DQUIT_TIMEOUT_MS=0"],
-    "quit0": ["-DHANDSHAKE_TIMEOUT_MS=300", "-DQUIT_TIMEOUT_MS=0", "-DCONNECT_TIMEOUT_MS=500"],
+    "quit0": ["-DHANDSHAKE_TIMEOUT_MS=%d" % _slow_hosts(300), "-DQUIT_TIMEOUT_MS=0",
+              "-DCONNECT_TIMEOUT_MS=%d" % _slow_hosts(500)],
 }
 
 DEFAULT_MACROS = {
@@ -364,16 +374,18 @@ def compilers():
     """The distinct C compilers of this host: [(name, path)]. CC alone if it is set."""
     if os.environ.get("CC"):
         return [(os.environ["CC"], shutil.which(os.environ["CC"]) or os.environ["CC"])]
-    seen, res = set(), []
+    # The same compiler goes by several names: cc is gcc on Linux (one file, two version lines), and
+    # on macOS gcc, clang and cc are three copies of Apple's clang (three files, one version text).
+    seen_files, seen_versions, res = set(), set(), []
     for name in ("gcc", "clang", "cc"):
         path = shutil.which(name)
         if not path:
             continue
-        ident = (cc_version(path), os.path.realpath(path))
-        key = cc_version(path)
-        if key in seen:
+        real, version = os.path.realpath(path), cc_version(path)
+        if real in seen_files or version in seen_versions:
             continue
-        seen.add(key)
+        seen_files.add(real)
+        seen_versions.add(version)
         res.append((name, path))
     return res
 

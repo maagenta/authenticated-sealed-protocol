@@ -83,16 +83,22 @@ def child_pids(pid=None):
     """Live children of a process, by asking ps. Empty if ps is unavailable."""
     import subprocess
     pid = os.getpid() if pid is None else pid
+    # One -o per column: with "-o pid=,ppid=,stat=" a BSD ps may take everything after the first
+    # equals sign for the header of the first column, and print the pids alone.
     try:
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,stat="], stdout=subprocess.PIPE,
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "stat="], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, timeout=10).stdout.decode()
     except (OSError, subprocess.SubprocessError):
         return []
-    res = []
+    res, understood = [], False
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) >= 3 and parts[1] == str(pid):
-            res.append((int(parts[0]), parts[2]))
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            understood = True
+            if parts[1] == str(pid):
+                res.append((int(parts[0]), parts[2]))
+    if out.strip() and not understood:
+        raise Fail("cannot read the output of ps: %r" % out[:200])
     return res
 
 
@@ -324,8 +330,11 @@ def wait_until(pred, timeout=5.0, step=0.01):
 
 
 def in_window(elapsed_ms, lo_ms, extra_ms=250):
-    """Whether elapsed_ms lies in [lo, lo + extra] (extra scaled by PROTO_TEST_SLACK)."""
-    return lo_ms <= elapsed_ms <= lo_ms + slack_ms(extra_ms)
+    """Whether elapsed_ms lies in [lo, lo + extra] (extra scaled by PROTO_TEST_SLACK).
+
+    The library counts whole milliseconds on a clock it reads once, so a deadline of lo may fire
+    up to a millisecond early (a Linux run measured 299 ms for 300): the window opens 2 ms below."""
+    return lo_ms - 2 <= elapsed_ms <= lo_ms + slack_ms(extra_ms)
 
 
 def set_nonblocking(fd, on=True):

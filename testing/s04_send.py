@@ -96,14 +96,21 @@ def t043():
             if not data:
                 break
             got.extend(data)
-    reader = net.Worker(drain)
+    # A fast machine moves 8 MiB before the storm has sent a handful of signals (5 on a macOS arm64
+    # runner): send again until it has interrupted the write often enough to mean something.
+    rounds = 0
     with net.SignalStorm(signal.SIGUSR1, 0.001) as storm:
-        rc = P.send_line(a.fileno(), line)
-    reader.finish(60)
-    eq(rc, 0, "proto_send_line under a signal storm")
-    check(storm.sent > 5, "the storm sent only %d signals" % storm.sent)
-    check(bytes(got) == line + b"\n", "the bytes on the wire differ from the line (got %d, want %d)"
-          % (len(got), size + 1))
+        while storm.sent <= 20 and rounds < 100:
+            del got[:]
+            reader = net.Worker(drain)
+            rc = P.send_line(a.fileno(), line)
+            reader.finish(60)
+            rounds += 1
+            eq(rc, 0, "proto_send_line under a signal storm (round %d)" % rounds)
+            check(bytes(got) == line + b"\n", "the bytes on the wire differ from the line (got %d, want %d)"
+                  % (len(got), size + 1))
+    check(storm.sent > 20, "the storm sent only %d signals in %d rounds" % (storm.sent, rounds))
+    harness.note("%d signals in %d rounds of 8 MiB" % (storm.sent, rounds))
 
 
 def sigpipe_default():

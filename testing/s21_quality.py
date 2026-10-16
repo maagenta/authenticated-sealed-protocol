@@ -14,7 +14,7 @@ import lib
 import net
 import runprobe
 import suite
-from harness import FINDING, HERE, ROOT, case, check, eq, fail, skip
+from harness import FINDING, HERE, ROOT, case, check, eq, skip
 from keyfiles import make_identity, write_file
 
 SOURCES = lib.LIB_SOURCES
@@ -40,38 +40,60 @@ def sanitizer_clean(err, kind):
     return not any(b in text for b in bad)
 
 
-def run_sanitized(name, args, seams, kind, leaks=False, timeout=180):
-    env = dict(lib.san_env(kind))
-    if kind == "asan":
-        env["ASAN_OPTIONS"] += ":detect_leaks=%d" % (1 if leaks else 0)
-    rc, out, err = runprobe.run(name, args, seams=seams, sanitize=kind, env=env, threads=True, timeout=timeout)
-    text = err.decode("utf-8", "replace")
-    if rc != 0 or not sanitizer_clean(text, kind):
-        fail("%s %s under %s failed (%d): %s" % (name, " ".join(args), kind, rc, text.strip()[-800:]))
+class Runs(object):
+    """Runs of programs under a sanitizer. A run that fails is kept and the next one goes on, so that a
+    test reports every run that failed and not the first, which on a platform seen for the first
+    time hides the rest."""
+
+    def __init__(self):
+        self.failed = []
+        self.count = 0
+
+    def probe(self, name, args, seams, kind, leaks=False, timeout=180):
+        env = dict(lib.san_env(kind))
+        if kind == "asan":
+            env["ASAN_OPTIONS"] += ":detect_leaks=%d" % (1 if leaks else 0)
+        rc, out, err = runprobe.run(name, args, seams=seams, sanitize=kind, env=env, threads=True, timeout=timeout)
+        text = err.decode("utf-8", "replace")
+        self.count += 1
+        if rc != 0 or not sanitizer_clean(text, kind):
+            self.failed.append("%s %s under %s failed (%d): %s" % (name, " ".join(args), kind, rc, text.strip()[-500:]))
+
+    def suite(self, label, **kwargs):
+        self.count += 1
+        try:
+            suite.run_suite(label, **kwargs)
+        except harness.Fail as e:
+            self.failed.append(str(e)[:600])
+
+    def done(self):
+        check(not self.failed, "%d of %d runs failed: %s" % (len(self.failed), self.count, " || ".join(self.failed)))
 
 
 @case("T-390", timeout=900)
 def t390():
     """ASan and UBSan find nothing."""
     require_sanitizer("asan")
-    suite.run_suite("asan", sanitize="asan")
+    runs = Runs()
+    runs.suite("asan", sanitize="asan")
     for name, seams, scenarios in SEAM_RUNS:
         for sc in scenarios:
-            run_sanitized(name, [sc], seams, "asan")
+            runs.probe(name, [sc], seams, "asan")
     ident = make_identity()
     for sc in ("read_eio", "read_eintr", "read_onebyte", "open_flags"):
-        run_sanitized("seam_crypto", [sc, ident.auth_pub], runprobe.CRYPTO_SEAMS, "asan")
+        runs.probe("seam_crypto", [sc, ident.auth_pub], runprobe.CRYPTO_SEAMS, "asan")
     d = harness.tmpdir("asan")
     kinds = {"ok": ident.auth_pub, "empty": write_file(os.path.join(d, "e"), b"\n"),
              "stray": write_file(os.path.join(d, "s"), b" " + open(ident.auth_pub, "rb").read()),
              "format": write_file(os.path.join(d, "f"), b"AAAA*AAAA\n"),
              "size": write_file(os.path.join(d, "z"), b"AAAA\n"), "readfail": ident.auth_pub}
     for kind, path in kinds.items():
-        run_sanitized("seam_crypto", ["memzero", kind, path], runprobe.CRYPTO_SEAMS, "asan")
+        runs.probe("seam_crypto", ["memzero", kind, path], runprobe.CRYPTO_SEAMS, "asan")
     for sc in ("malloc_fail", "unseal_alloc", "unseal_failures"):
-        run_sanitized("seam_crypto", [sc], runprobe.CRYPTO_SEAMS, "asan")
+        runs.probe("seam_crypto", [sc], runprobe.CRYPTO_SEAMS, "asan")
     for sc in (["strerror"], ["init"], ["load", ident.auth_key, ident.enc_key]):
-        run_sanitized("threads", sc, None, "asan")
+        runs.probe("threads", sc, None, "asan")
+    runs.done()
 
 
 @case("T-391", timeout=600)
@@ -80,10 +102,12 @@ def t391():
     require_sanitizer("asan")
     if not lib.leak_check_supported():
         skip("this platform's AddressSanitizer cannot detect leaks")
-    suite.run_suite("lsan", sanitize="asan", leaks=True)
+    runs = Runs()
+    runs.suite("lsan", sanitize="asan", leaks=True)
     for sc in ("dyn_alloc", "malloc_fail", "realloc_fail"):
-        run_sanitized("seam_wire", [sc], runprobe.WIRE_SEAMS, "asan", leaks=True)
-    run_sanitized("seam_crypto", ["unseal_failures"], runprobe.CRYPTO_SEAMS, "asan", leaks=True)
+        runs.probe("seam_wire", [sc], runprobe.WIRE_SEAMS, "asan", leaks=True)
+    runs.probe("seam_crypto", ["unseal_failures"], runprobe.CRYPTO_SEAMS, "asan", leaks=True)
+    runs.done()
 
 
 @case("T-392", FINDING, timeout=600)
@@ -110,7 +134,7 @@ def t393():
     exe = suite.build()
     scenarios = ["wire", "keys", "seal", "seal_bounds", "sign", "handshake"]
     rc, out = lib.run([vg, "--error-exitcode=99", "--leak-check=full", "--errors-for-leak-kinds=definite", "-q",
-                       exe] + scenarios, timeout=800)
+                       exe] + scenarios, timeout=800, env=dict(os.environ, PROTO_SUITE_VALGRIND="1"))
     check(rc == 0, "valgrind reports (%d): %s" % (rc, out[-900:]))
 
 

@@ -1,0 +1,6 @@
+# warnings of the clang static analyzer per source on linux (T-399)
+auth.c 0
+crypto.c 0
+serve.c 0
+status.c 0
+wire.c 0

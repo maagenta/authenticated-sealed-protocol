@@ -1,0 +1,6 @@
+# cppcheck findings per source on linux (T-400)
+auth.c 0
+crypto.c 0
+serve.c 0
+status.c 0
+wire.c 0

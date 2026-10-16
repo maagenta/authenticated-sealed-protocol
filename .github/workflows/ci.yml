@@ -117,6 +117,8 @@ jobs:
               sudo pkg_add pkgin || true
               export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH
               sudo pkgin -y install python312 libsodium pkgconf
+              # pkgsrc installs the interpreter as python3.12 only
+              sudo ln -sf /usr/pkg/bin/python3.12 /usr/pkg/bin/python3
               ;;
           esac
 
@@ -140,7 +142,7 @@ jobs:
         run: |
           docker build -t proto-alpine - <<'EOF'
           FROM alpine:3.22
-          RUN apk add --no-cache build-base python3 libsodium-dev pkgconf linux-headers valgrind
+          RUN apk add --no-cache build-base python3 libsodium-dev pkgconf linux-headers valgrind procps-ng
           EOF
       - name: Run the tests as an ordinary user
         run: |

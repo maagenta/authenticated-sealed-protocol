@@ -16,7 +16,7 @@ WIRE_SEAMS = {"wire.c": ["-Dsend=seam_send", "-Drecv=count_recv", "-Dread=count_
 AUTH_SEAMS = {
     "auth.c": ["-Dgetaddrinfo=seam_getaddrinfo", "-Dfreeaddrinfo=seam_freeaddrinfo",
                "-Dsocket=seam_socket", "-Dconnect=seam_connect", "-Dgetsockopt=seam_getsockopt",
-               "-Dclose=seam_close", "-Dstrdup=seam_strdup", "-Dmalloc=seam_malloc",
+               "-Dclose=seam_close", "-Dpoll=seam_poll", "-Dstrdup=seam_strdup", "-Dmalloc=seam_malloc",
                "-Dfree=seam_free"],
     "wire.c": ["-Dsend=seam_send"],
 }

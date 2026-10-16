@@ -150,12 +150,35 @@ static void make_tcp(int sv[2]) {
 
 /* -------------------------------------------------------------- scenarios */
 
+struct drain {
+    int fd;
+    char *buf;
+    size_t cap, have;
+    pthread_t tid;
+};
+
+static void *drain_thread(void *arg) {
+    struct drain *d = arg;
+    while (d->have < d->cap) {
+        ssize_t n = read(d->fd, d->buf + d->have, d->cap - d->have);
+        if (n <= 0) break;
+        d->have += (size_t)n;
+    }
+    return NULL;
+}
+
 /* T-042: short writes are resumed. */
 static void short_write(void) {
     int sv[2];
     make_pair(sv);
     char *line = make_line(3000, 'a', 0);
     char *body = make_line(2500, 'A', 0);
+    size_t want = 3000 + 1 + 4 + 2500 + 1;
+    /* Read while the writing goes on: a send of a few bytes costs a whole buffer of the socket's budget
+     * on Linux (each one is accounted at its size plus the kernel's overhead), so a thousand of them
+     * fill a socketpair that nobody reads and the writer waits for ever. */
+    struct drain d = { sv[1], malloc(want + 8), want + 8, 0, 0 };
+    if (!d.buf || pthread_create(&d.tid, NULL, drain_thread, &d) != 0) FAILF("cannot start the reader");
     send_mode = 1;
     CHECK_EQ(proto_send_line(sv[0], line), PROTO_OK);
     CHECK(send_calls > 3000 / 7);
@@ -163,19 +186,16 @@ static void short_write(void) {
     CHECK_EQ(proto_send_prefixed(sv[0], "PUT ", body, 2500), PROTO_OK);
     CHECK(send_calls - first > 2500 / 7);
     send_mode = 0;
+    close(sv[0]);                                   /* the reader sees the end of the stream */
+    pthread_join(d.tid, NULL);
 
-    size_t want = 3000 + 1 + 4 + 2500 + 1;
-    char *got = malloc(want + 8);
-    size_t have = 0;
-    while (have < want) {
-        ssize_t r = read(sv[1], got + have, want + 8 - have);
-        if (r <= 0) FAILF("short read of the stream");
-        have += (size_t)r;
-    }
-    CHECK_EQ(have, want);
+    char *got = d.buf;
+    CHECK_EQ(d.have, want);
     CHECK(memcmp(got, line, 3000) == 0 && got[3000] == '\n');
     CHECK(memcmp(got + 3001, "PUT ", 4) == 0);
     CHECK(memcmp(got + 3005, body, 2500) == 0 && got[5505] == '\n');
+    free(got); free(line); free(body);
+    close(sv[1]);
 }
 
 /* T-072: on a pipe the peek is tried once per line. */
@@ -230,6 +250,7 @@ static void dyn_alloc(void) {
     CHECK_EQ(realloc_calls, 0);
     CHECK_EQ(alloc_sizes[0], 4096);
     free(got);
+    free(small);
 
     size_t n = 1024 * 1024;
     char *big = make_line(n, 'a', 1);
@@ -245,6 +266,7 @@ static void dyn_alloc(void) {
     for (unsigned long i = 1; i <= realloc_calls; i++)
         CHECK_EQ(alloc_sizes[i], alloc_sizes[i - 1] * 2);
     free(got);
+    free(big);
 }
 
 /* T-105: memory is bounded by the cap. */
@@ -272,6 +294,7 @@ static void dyn_bound(void) {
         left += (size_t)r;
     }
     CHECK_EQ(left, 99);
+    free(data);
 }
 
 /* T-106: a failed first malloc is PROTO_E_NOMEM, and nothing was read. */
@@ -308,6 +331,7 @@ static void realloc_fail(void) {
     CHECK(freed[0] == last_malloc);
     close(sv[1]);                       /* the sender may still be writing */
     pthread_join(s.tid, NULL);
+    free(line);
 }
 
 int main(int argc, char **argv) {

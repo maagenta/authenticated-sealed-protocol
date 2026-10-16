@@ -260,7 +260,11 @@ static void seal_bounds(void) {
     CHECK_EQ(proto_seal(NULL, SEAL_MSG_MAX, pk, out, 0), PROTO_E_BUFFER_TOO_SMALL);
     CHECK(proto_seal_new(NULL, SIZE_MAX, pk) == NULL);
     CHECK(proto_seal_new(NULL, SIZE_MAX - 47, pk) == NULL);
-    CHECK(proto_seal_new(NULL, SEAL_MSG_MAX + 1, pk) == NULL);
+    /* This length makes proto_seal_new ask malloc for SIZE_MAX - 2 bytes, which valgrind reports as a
+     * "fishy" size. The request failing is what the check is for, so valgrind does not run this line;
+     * every other build does. */
+    if (!getenv("PROTO_SUITE_VALGRIND"))
+        CHECK(proto_seal_new(NULL, SEAL_MSG_MAX + 1, pk) == NULL);
 }
 
 /* ------------------------------------------------------------------- sign */

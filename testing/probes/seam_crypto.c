@@ -189,6 +189,7 @@ int main(int argc, char **argv) {
         }
         CHECK(proto_unseal_new(good, pk2, sk2, NULL) == NULL);          /* wrong recipient */
         CHECK_EQ(malloc_calls, free_calls);
+        free(good); free(bad); free(trunc); free(extra);
     } else {
         FAILF("unknown scenario %s", sc);
     }

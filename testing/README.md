@@ -133,7 +133,7 @@ only run there, `(root)` needs privileges, `(not as root)` must not have them,
 | `CC` | The compiler of every build. With it set, the build tests use only that one. |
 | `SODIUM_CFLAGS`, `SODIUM_LIBS` | Where libsodium is, when `pkg-config` does not know. |
 | `SODIUM32_CFLAGS`, `SODIUM32_LIBS` | The same for the 32-bit build (T-019, T-186, T-402). |
-| `PROTO_TEST_SLACK` | Multiplies the slack of every timing window. Slow hosts and emulators set 3 or 4. |
+| `PROTO_TEST_SLACK` | Multiplies the slack of every timing window, and the timeouts of the `fast` build. Slow hosts and emulators set 3 or 4. |
 | `PROTO_TEST_TIMEOUT` | Seconds a test may run before it is killed (default 60). |
 | `PROTO_FUZZ_SECONDS` | Time budget of each fuzz target (default 20; CI uses 60, nightly 300). |
 | `PROTO_FUZZ_SEED` | The seed of the fuzz targets, to repeat a run (default: the time). |
@@ -162,13 +162,13 @@ the timeouts and framing options are compile-time:
 | Variant | Flags | Used for |
 |---|---|---|
 | `default` | none | the defaults themselves, and the load tests, where a timeout must not interfere |
-| `fast` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=200`, `CONNECT_TIMEOUT_MS=500` | almost every test, so that timing tests take under a second |
+| `fast` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=200`, `CONNECT_TIMEOUT_MS=500`, each times `PROTO_TEST_SLACK` | almost every test, so that timing tests take under a second |
 | `chunk1`, `chunk3` | `fast` and `READ_CHUNK=1` or `3` | T-011: the `wire` tests must pass unchanged |
 | `pay64` | `fast` and `MAX_PAYLOAD=64` | the boundaries of the payload cap, cheap to reach |
 | `pay64c1`, `pay64c3` | `pay64` with `READ_CHUNK` 1 and 3 | the cap however the bytes arrive (T-101) |
 | `pay4096` | `fast` and `MAX_PAYLOAD=4096` | the largest message of the vault of `docs.md` and one byte more (T-388) |
 | `min` | `HANDSHAKE_TIMEOUT_MS=1`, `QUIT_TIMEOUT_MS=0` | the smallest values the options take |
-| `quit0` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=0`, `CONNECT_TIMEOUT_MS=500` | `proto_close` that does not wait (T-288) |
+| `quit0` | `HANDSHAKE_TIMEOUT_MS=300`, `QUIT_TIMEOUT_MS=0`, `CONNECT_TIMEOUT_MS=500`, the two timeouts times `PROTO_TEST_SLACK` | `proto_close` that does not wait (T-288) |
 
 Builds are cached under `testing/.build/`, keyed on the sources and the flags.
 
@@ -200,9 +200,10 @@ fallback that reads a byte at a time. Silence, for a connect timeout, comes from
 a listener with a full accept queue (Linux) or from the `getaddrinfo` and
 `connect` seams. A port is found by binding port 0 and reading it back.
 
-**Timing.** Windows, never exact values: `[ms, ms + 250]`, measured on the
-monotonic clock, scaled by `PROTO_TEST_SLACK`. No test asserts a duration that
-is not its own deadline.
+**Timing.** Windows, never exact values: `[ms - 2, ms + 250]`, measured on the
+monotonic clock, scaled by `PROTO_TEST_SLACK`. The library counts whole
+milliseconds, so a deadline can fire a millisecond early (a Linux run measured
+299 ms for 300). No test asserts a duration that is not its own deadline.
 
 **Fuzzing.** `fuzzing.py` has five targets: the key-file parser, the line
 readers, the server handshake, the client handshake and `proto_unseal_new`. Each
@@ -257,9 +258,11 @@ without the slow tests. Nightly there is also a job in an Alpine container
 (musl), one for the 32-bit build, and a privileged one on Ubuntu for the `(root)`
 tests. The warning and analyzer baselines (`baselines/`) are kept per compiler
 and per platform, such as `warnings-clang-macos.txt`, because what a compiler
-says also depends on the system headers. A host without a baseline notes what it
-found and skips the comparison; `--record-baselines` writes the files, and a CI
-log that shows the counts is enough to commit them.
+says also depends on the system headers. Those of macOS (clang), Linux (gcc,
+clang and cppcheck) and FreeBSD (clang) were taken from the first CI runs; a host
+without one, OpenBSD and NetBSD so far, notes what it found and skips the
+comparison. `--record-baselines` writes the files, and a CI log that shows the
+counts is enough to commit them.
 
 What was measured where: where a claim was in doubt, a throwaway probe settled
 it on macOS 14.8.4 (Darwin 23.6.0, x86-64) with Apple clang 16.0.0 and libsodium
