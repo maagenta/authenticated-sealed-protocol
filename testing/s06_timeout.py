@@ -29,7 +29,7 @@ def t080():
     """A line already waiting is returned at once."""
     P = lib.proto()
     f = net.Feed(b"waiting\n")
-    time.sleep(0.05)
+    f.finish()                                    # the whole line is in the socket
     rc, text, took = timed(P, f.fd, 1000)
     eq((rc, text), (7, b"waiting"), "proto_recv_line_timeout")
     check(took < 250 + slack_ms(250), "it waited %.0f ms for a line that was there" % took)
@@ -111,7 +111,7 @@ def t086():
     """ms == 0 is PROTO_E_TIMEOUT even when a whole line is waiting."""
     P = lib.proto()
     f = net.Feed(b"line\n")
-    time.sleep(0.05)
+    f.finish()                                    # the whole line is waiting
     eq(P.recv_line_timeout(f.fd, 0)[0], -605, "ms == 0 with a line waiting")
     # ms == 1 reads it; a millisecond tick between two clock reads may still
     # time it out. Where READ_CHUNK is shorter than the line, the timeout can
@@ -132,7 +132,7 @@ def t087():
     """ms = INT_MAX does not overflow the deadline."""
     P = lib.proto()
     f = net.Feed(b"max\n")
-    time.sleep(0.05)
+    f.finish()
     rc, text, took = timed(P, f.fd, INT_MAX)
     eq((rc, text), (3, b"max"), "proto_recv_line_timeout")
 

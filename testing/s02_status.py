@@ -71,24 +71,8 @@ def t030():
         check(f(v) is not None, "proto_strerror(%d) returned NULL" % v)
 
 
-@case("T-031")
-def t031():
-    """rc < 0 partitions the values."""
-    eq(st.VALUE["PROTO_OK"], 0, "PROTO_OK")
-    eq(st.VALUE["PROTO_REGISTER_REQUESTED"], 1, "PROTO_REGISTER_REQUESTED")
-    eq(st.VALUE["PROTO_KEEPALIVE_DEFAULTED"], 2, "PROTO_KEEPALIVE_DEFAULTED")
-    families = {"caller": 1, "resources": 2, "key files": 3, "cryptography": 4, "sockets": 5,
-                "lines": 6, "handshake": 7}
-    for name, value, fam, _ in st.STATUS:
-        if fam == "success":
-            continue
-        check(value < 0, "%s is not negative" % name)
-        eq((-value) // 100, families[fam], "hundreds digit of %s (%s)" % (name, fam))
-
-
-@case("T-032")
-def t032():
-    """The values are frozen."""
+def header_values():
+    """{name: value} of the members of the table, as status.h defines them: a program prints them."""
     body = "".join('    printf("%s %%d\\n", (int)%s);\n' % (n, n) for n, _, _, _ in st.STATUS)
     src = '#include <stdio.h>\n#include "status.h"\nint main(void) {\n' + body + "    return 0;\n}\n"
     d = harness.tmpdir("vals")
@@ -98,7 +82,32 @@ def t032():
     rc, out = lib.run([lib.cc(), "-o", os.path.join(d, "v"), "-I", harness.ROOT, path])
     check(rc == 0, "cannot build the value dump: " + out[-300:])
     rc, out, err = lib.run_exe(os.path.join(d, "v"))
-    got = dict((l.split()[0], int(l.split()[1])) for l in out.decode().splitlines())
+    check(rc == 0, "the value dump exited %d" % rc)
+    return dict((l.split()[0], int(l.split()[1])) for l in out.decode().splitlines())
+
+
+@case("T-031")
+def t031():
+    """rc < 0 partitions the values."""
+    # The values status.h gives, not those of this suite's table: a sign flipped in the header must show here.
+    values = header_values()
+    eq(values.get("PROTO_OK"), 0, "PROTO_OK")
+    eq(values.get("PROTO_REGISTER_REQUESTED"), 1, "PROTO_REGISTER_REQUESTED")
+    eq(values.get("PROTO_KEEPALIVE_DEFAULTED"), 2, "PROTO_KEEPALIVE_DEFAULTED")
+    families = {"caller": 1, "resources": 2, "key files": 3, "cryptography": 4, "sockets": 5,
+                "lines": 6, "handshake": 7}
+    for name, _, fam, _ in st.STATUS:
+        if fam == "success":
+            continue
+        value = values.get(name)
+        check(value is not None and value < 0, "%s is not negative: %r" % (name, value))
+        eq((-value) // 100, families[fam], "hundreds digit of %s (%s)" % (name, fam))
+
+
+@case("T-032")
+def t032():
+    """The values are frozen."""
+    got = header_values()
     for name, value, _, _ in st.STATUS:
         eq(got.get(name), value, "value of %s" % name)
 

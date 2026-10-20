@@ -468,6 +468,7 @@ def t024():
     text = docsx.read("keygen/Makefile")
     check(re.search(r"^CC\s*=\s*gcc\s*$", text, re.M), "CC is no longer hard-coded to gcc: update this pin")
     check(re.search(r"^CFLAGS\s*=", text, re.M), "CFLAGS is no longer assigned outright: update this pin")
+    check(re.search(r"^LDFLAGS\s*=", text, re.M), "LDFLAGS is no longer assigned outright: update this pin")
     check(not re.search(r"^CC\s*\?=", text, re.M), "CC is now overridable from the environment")
 
 
@@ -477,6 +478,8 @@ def t025():
     cross = shutil.which("aarch64-linux-gnu-gcc")
     if not cross:
         skip("no aarch64-linux-gnu-gcc")
+    if not shutil.which("file"):
+        skip("no file command to tell what was built")
     d = harness.tmpdir("kg")
     c_flags, ld_flags = lib.sodium()
     rc, out = lib.run(["make", "-C", os.path.join(ROOT, "keygen"), "arm64", "BUILD=" + d,

@@ -328,10 +328,10 @@ Defects:
 11. **T-051, T-174, T-198, T-290** Four `NULL` arguments crash the process:
     `proto_send_line(fd, NULL)`, `proto_load_pubkey_hex(path, NULL, 65)`,
     `proto_unseal_new(NULL, ...)` and `proto_close(NULL)`.
-12. **T-014, T-015** The sources rely on the platform's default feature level: a
+12. **T-014** The sources rely on the platform's default feature level: a
     strict `-std=c11` or `-std=c99` on glibc and musl hides POSIX declarations
-    they use (reasoned), and `-D_POSIX_C_SOURCE=200809L` on macOS hides
-    `TCP_KEEPALIVE`.
+    they use (reasoned). Its macOS half, `-D_POSIX_C_SOURCE=200809L` hiding
+    `TCP_KEEPALIVE`, is fixed (T-015).
 
 The code and the documents disagree:
 
@@ -358,8 +358,10 @@ Found by the fuzz targets:
     of a sealed box, is taken for a character of the alphabet: a damaged key file
     loads as another key, and an altered box can still open.
 
-T-014 is a finding on Linux alone, so a run on macOS shows 32 of these 33 as
-expected failures.
+T-014 is a finding on Linux alone and T-299 runs on macOS alone, so a run on
+either shows at most 31 of these 32 as expected failures. A finding whose tool
+or condition is missing skips instead: T-330 and T-392 need ThreadSanitizer,
+and T-424 and T-425 a libsodium whose decoder takes bytes above 0x7F.
 
 ## Open questions
 
@@ -724,18 +726,22 @@ Code: `s04_send.py::t041`.
 **T-042 — Short writes are resumed.**
 A `send` seam on `wire.c` that moves at most 7 bytes per call, and a
 single byte on every third call: `PROTO_OK`, and the reader gets the
-line byte-exact, for both `proto_send_line` and `proto_send_prefixed`. A
-blocking socket seldom writes short on its own, so the seam is the
-deterministic form; T-043 is the real-socket one. (seam)
+line byte-exact, for both `proto_send_line` and `proto_send_prefixed`,
+with a line under 4 KiB, which goes out in one write, and one over it,
+which goes out in three. A blocking socket seldom writes short on its
+own, so the seam is the deterministic form; T-043 is the real-socket one.
+(seam)
 
 Code: `s04_send.py::t042`.
 
 **T-043 — A signal during a large write neither fails it nor repeats bytes.**
 An 8 MiB line over a socketpair whose `SO_SNDBUF` is shrunk to
-4 KiB, with a reader draining it as fast as it can, while `setitimer`
-fires `SIGALRM` every millisecond into a handler installed without
-`SA_RESTART`: `PROTO_OK`, byte-exact, nothing sent twice. This covers
-`EINTR` and the partial counts a signal leaves.
+4 KiB, with a reader draining it as fast as it can, while another thread
+sends `SIGUSR1` to the writing thread every millisecond, into a handler
+installed without `SA_RESTART`: `PROTO_OK`, byte-exact, nothing sent
+twice. A fast machine moves 8 MiB before many signals land, so the line
+is sent again until more than 20 have. This covers `EINTR` and the
+partial counts a signal leaves.
 
 Code: `s04_send.py::t043`.
 
@@ -948,8 +954,9 @@ it also checks, byte for byte, a line assembled across chunks. (seam)
 Code: `s05_recv.py::t073`.
 
 **T-074 — A signal does not fail a blocked read.**
-`SIGALRM` without `SA_RESTART` fires during the wait, and the line
-arrives later: the call returns the line, not `PROTO_E_READ`.
+`SIGUSR1`, every 5 ms into a handler installed without `SA_RESTART`,
+interrupts the wait, and the line arrives 300 ms later: the call returns
+the line, not `PROTO_E_READ`.
 
 Code: `s05_recv.py::t074`. Also run in every framing build by T-011.
 
@@ -1012,9 +1019,9 @@ application should close.
 Code: `s06_timeout.py::t082`. Also run in every framing build by T-011.
 
 **T-083 — Signals do not stretch the deadline.**
-`SIGALRM` every 10 ms without `SA_RESTART`, a silent peer, `ms = 300`:
-`PROTO_E_TIMEOUT` at about 300 ms, not later. The time left is
-recomputed after every interruption.
+`SIGUSR1` every 10 ms into a handler installed without `SA_RESTART`, a
+silent peer, `ms = 300`: `PROTO_E_TIMEOUT` at about 300 ms, not later.
+The time left is recomputed after every interruption.
 
 Code: `s06_timeout.py::t083`. Also run in every framing build by T-011.
 
@@ -1798,7 +1805,11 @@ and `0.75 L` for the plaintext: the figures behind the "2.75 x
 Code: `s11_seal.py::t201`.
 
 **T-202 — A failed open returns nothing and leaks nothing.**
-LSan reports no leak after every failure in this section.
+Every failure in this section (not base64, too short, a damaged box, a
+truncated one, bytes appended, the wrong recipient) returns `NULL`,
+leaves `*out_len` as it was, and frees what it allocated: a seam on
+`crypto.c` counts the allocations and the frees, so the check needs no
+LeakSanitizer; T-391 runs the same scenario under it. (seam)
 
 Code: `s11_seal.py::t202`.
 
@@ -2272,9 +2283,10 @@ Code: `s14_connect.py::t270`.
 
 **T-271 — No descriptor leaks on failure.**
 The count of open fds is unchanged after `PROTO_E_RESOLVE`,
-`PROTO_E_CONNECT`, `PROTO_E_CONNECT_TIMEOUT`, `PROTO_E_SOCKET`,
-`PROTO_E_REJECTED`, `PROTO_E_TIMEOUT` and `PROTO_E_REGISTER_REJECTED`,
-and `conn->fd == -1` after each.
+`PROTO_E_CONNECT`, `PROTO_E_REJECTED`, `PROTO_E_TIMEOUT` and
+`PROTO_E_REGISTER_REJECTED`, and `conn->fd == -1` after each.
+`PROTO_E_CONNECT_TIMEOUT` and `PROTO_E_SOCKET` take the seams of T-268
+to happen on every host, and that test counts the descriptors after them.
 
 Code: `s14_connect.py::t271`.
 
@@ -2295,8 +2307,8 @@ Code: `s14_connect.py::t273`.
 **T-274 — A descriptor that is not a socket is left alone.**
 A `{0}` conn with an ordinary stdin (a terminal, a file, a pipe):
 `PROTO_OK`, and stdin is still open and unchanged. Any descriptor that
-is not a socket is treated the same way: a pipe at fd 5 in `conn->fd`
-stays open and is replaced.
+is not a socket is treated the same way: a pipe in `conn->fd`, at the
+first free descriptor from 5, stays open and is replaced.
 
 Code: `s14_connect.py::t274`.
 
@@ -2580,7 +2592,9 @@ Code: `s16_serve.py::t314`.
 
 **T-315 — Clients are served in parallel.**
 20 clients whose handlers each sleep 200 ms finish in about 200 ms, not
-4 s.
+4 s: the bound is three quarters of the time one by one would take. On a
+slow host the sleep grows with `PROTO_TEST_SLACK`, and the bound with it,
+so that the test still tells the two apart there.
 
 Code: `s16_serve.py::t315`.
 
@@ -2913,7 +2927,8 @@ probe removed.
 Code: `s19_keygen.py::t361`.
 
 **T-362 — A read-only directory is refused, and nothing is created.**
-Exit 1, "cannot create files here: Permission denied". (observed)
+Exit 1, "cannot create files here: Permission denied" (observed). Root
+writes to a read-only directory all the same. (not as root)
 
 Code: `s19_keygen.py::t362`.
 
@@ -3153,7 +3168,8 @@ Code: `s21_quality.py::t394`.
 
 **T-395 — Fuzz the line readers.**
 Arbitrary bytes into a socketpair, read with `proto_recv_line` (random
-`bufsz`), `proto_recv_line_timeout` (`ms` from 0 to 50) and
+`bufsz`), `proto_recv_line_timeout` (`ms` from 0 to 50, times
+`PROTO_TEST_SLACK`: every byte is there already, so only 0 may fire) and
 `proto_recv_line_dyn_status` (a `MAX_PAYLOAD=4096` build). Properties:
 no crash; nothing consumed beyond what was returned, its newline and its
 `\r`s, so the rest is intact; `buf` always NUL-terminated. (fuzz)
@@ -3207,9 +3223,12 @@ Code: `s21_quality.py::t402`.
 Code: `s21_quality.py::t403`.
 
 **T-404 — The fuzz corpora are kept, and grow with every fix.**
-They live in `testing/corpus/<target>/`; each target runs 60 s on every
-pull request and longer nightly, and an input that crashes is added to
-the corpus with its fix. (fuzz)
+They live in `testing/corpus/<target>/`, and every input in them, seeds
+and kept crashes alike, goes through its target once on every run: it
+takes a moment, so a defect a kept input found cannot come back between
+two fuzzing jobs. The targets themselves (T-394 to T-398) run 60 s each
+on every pull request and longer nightly, and an input that breaks a
+property is added to the corpus with its fix.
 
 Code: `s21_quality.py::t404`.
 
@@ -3388,8 +3407,9 @@ base64. At either end of the line the byte is `PROTO_E_KEY_STRAY`, so
 only the inside is open. Expect `PROTO_E_KEY_FORMAT`: check every
 character against the alphabet (`is_b64_char` is already there) before
 decoding. The fuzz target skips such inputs until this is fixed. Where
-`char` is unsigned (Linux on arm64) the decoder takes no such byte, and
-the test skips.
+the decoder takes no such byte the test skips: where `char` is unsigned
+(Linux on arm64), and with a libsodium whose decoder checks the byte
+(observed with 1.0.22 on x86-64 Linux).
 
 Code: `s24_found.py::t424`.
 
@@ -3403,7 +3423,8 @@ test puts each of the 128 values in place of each of the first 24
 characters of a box. It picks a box where one of those characters is one
 that such a byte can stand for, about one in four, found by asking
 libsodium's decoder which characters the bytes are taken for; where the
-decoder takes none (`char` unsigned), the test skips.
+decoder takes none (`char` unsigned, or a libsodium that checks the
+byte, as T-424 says), the test skips.
 
 Code: `s24_found.py::t425`.
 

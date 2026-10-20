@@ -134,11 +134,9 @@ def t361():
     check(set(FILES) <= set(listing(d)), "the key files were not made")
 
 
-@case("T-362")
+@case("T-362", tags=("notroot",))
 def t362():
     """A read-only directory is refused, and nothing is created."""
-    if os.geteuid() == 0:
-        skip("root writes to a read-only directory")
     d = fresh()
     os.chmod(d, 0o500)
     try:

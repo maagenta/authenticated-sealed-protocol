@@ -103,9 +103,12 @@ def t060():
 def t061():
     """A one-byte buffer holds only empty lines."""
     P = lib.proto()
-    eq(read(P, fed(b"\n").fd, 1), (0, b""), "newline")
-    eq(read(P, fed(b"a\n").fd, 1), (-604, b""), "one character")
-    eq(read(P, fed(b"\r\r\r\n").fd, 1), (0, b""), "carriage returns only")
+    # Each feed is held until it has been read: a Feed and its writer thread refer to each other, so a
+    # temporary one is left to the garbage collector, which may close its sockets in the middle of the read.
+    newline, char, crs = fed(b"\n"), fed(b"a\n"), fed(b"\r\r\r\n")
+    eq(read(P, newline.fd, 1), (0, b""), "newline")
+    eq(read(P, char.fd, 1), (-604, b""), "one character")
+    eq(read(P, crs.fd, 1), (0, b""), "carriage returns only")
 
 
 @case("T-062", variant_safe=True)
@@ -179,7 +182,7 @@ def t068():
     """Nothing of the next line is taken, on a socket."""
     P = lib.proto()
     f = fed(b"one\ntwo\nthree")
-    time.sleep(0.05)
+    f.finish()                                    # every byte is in the socket before the first read
     eq(read(P, f.fd, 16), (3, b"one"), "first line")
     eq(f.b.recv(100, socket.MSG_DONTWAIT), b"two\nthree", "what a raw recv still finds")
 

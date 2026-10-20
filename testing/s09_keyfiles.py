@@ -59,7 +59,6 @@ def t126():
     P = lib.proto()
     junk = b"second line\n\0\xff\xfe binary \r\n"
     all_three(P, lambda raw: key_line(raw) + junk, OK, "anything after line 1")
-    label = lambda name: (lambda raw: key_line(raw) + ("# %s %s\n" % (name, hashlib.sha256(raw).hexdigest())).encode())
     # The labelled files of v2.0: the kind of key and the SHA-256 of auth_pk.
     d = harness.tmpdir("labelled")
     ident = make_identity(d, write=False)
@@ -149,16 +148,16 @@ def t135():
         all_three(P, with_char_inside(ch), FORMAT, "%r inside the key" % ch)
 
 
-def urlsafe_with_leading_dash(raw):
-    raw = b"\xff" + raw[1:]
+def urlsafe_with_leading_underscore(raw):
+    raw = b"\xff" + raw[1:]                       # six bits of ones: '_' in the URL-safe alphabet
     return base64.urlsafe_b64encode(raw) + b"\n"
 
 
 @case("T-136", FINDING)
 def t136():
     """URL-safe base64 is PROTO_E_KEY_FORMAT wherever its - or _ falls."""
-    got = three_loads(lib.proto(), urlsafe_with_leading_dash)
-    text = urlsafe_with_leading_dash(b"\0" * 32)[:1]
+    got = three_loads(lib.proto(), urlsafe_with_leading_underscore)
+    text = urlsafe_with_leading_underscore(b"\0" * 32)[:1]
     check(text in (b"_", b"-"), "test data is wrong: %r" % text)
     eq(got, (FORMAT, FORMAT, FORMAT), "a URL-safe key that begins with %r" % text)
 

@@ -13,7 +13,8 @@ def twins():
     """{byte above 0x7F: the characters of the alphabet libsodium's decoder takes it for}.
 
     Where `char` is signed the decoder compares more than eight bits of a negative value and takes
-    most of these bytes for a character; where it is unsigned (arm64 Linux) it takes none."""
+    most of these bytes for a character; where it is unsigned (arm64 Linux) it takes none, and
+    neither does a libsodium whose decoder checks the byte (1.0.22 on x86-64 Linux)."""
     plain = {c: ls.base642bin(bytes([c]) + b"AAA") for c in ALPHABET}
     res = {}
     for v in range(0x80, 0x100):
@@ -27,7 +28,8 @@ def a_byte_the_decoder_accepts():
     for v, chars in twins().items():
         if chars:
             return v, chars
-    skip("the decoder of this libsodium takes no byte above 0x7F for a character (char is unsigned here)")
+    skip("the decoder of this libsodium takes no byte above 0x7F for a character "
+         "(char is unsigned here, or this libsodium checks the byte)")
 
 
 @case("T-424", FINDING)

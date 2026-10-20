@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-from harness import Fail, slack_ms
+from harness import SLACK, Fail, slack_ms
 
 
 def now():
@@ -209,7 +209,7 @@ class Peer(object):
     def recv_line(self, timeout=5.0):
         """The next line without its newline; None at end of stream. A '\\r'
         before the newline is kept: the peer sees the bytes as they are."""
-        deadline = time.monotonic() + timeout * max(1.0, 1.0)
+        deadline = time.monotonic() + timeout * max(1.0, SLACK)
         while b"\n" not in self.buf:
             if self.eof:
                 if self.buf:

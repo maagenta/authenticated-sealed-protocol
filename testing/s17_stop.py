@@ -50,8 +50,7 @@ def t329():
 @case("T-330", FINDING)
 def t330():
     """A stop from another thread is free of data races."""
-    import lib as _lib
-    if not _lib.sanitizer_works("tsan"):
+    if not lib.sanitizer_works("tsan"):
         skip("ThreadSanitizer does not work here")
     rc, err, used = runprobe.threads("stop", net.free_port())
     check(used, "ThreadSanitizer was not used")
@@ -198,7 +197,8 @@ def t339():
         eq(srv.stop(), 0, "the server's exit status")
         took = net.ms_since(t0)
         check(net.in_window(took, 500, 400), "the drain took %.0f ms with drain_ms 500" % took)
-        check(len(net.child_pids(srv.pid)) >= 0, "")
+        # The parent is gone, so the child is no longer among its children: its connection, still open,
+        # is what shows it alive.
         a = net.Peer(socket.socket(fileno=os.dup(conn.fd)))
         check(a.silent_for(0.2), "the busy child's connection ended with the server")
         os.close(conn.fd)

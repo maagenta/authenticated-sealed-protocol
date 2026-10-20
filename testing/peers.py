@@ -23,6 +23,8 @@ def server_handshake(peer, expected_pk=None, reply=b"OK", challenge=None, requir
     """
     info = {"lines": [], "challenge": None, "pk": None, "sig": None, "ok": False}
     hello = peer.recv_line()
+    if hello is None:
+        return info                                 # the client hung up first: nobody to answer
     info["lines"].append(hello)
     if hello != b"HELLO":
         peer.send_line(b"FAIL expected HELLO")
@@ -31,6 +33,8 @@ def server_handshake(peer, expected_pk=None, reply=b"OK", challenge=None, requir
     info["challenge"] = challenge
     peer.send_line(b"CHALLENGE " + ls.b64(challenge).encode())
     auth = peer.recv_line()
+    if auth is None:
+        return info
     info["lines"].append(auth)
     fields = parse_auth(auth)
     if not fields:

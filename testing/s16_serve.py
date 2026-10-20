@@ -14,7 +14,7 @@ import lib
 import net
 import runprobe
 import servers
-from harness import FINDING, PIN, PLATFORM, case, check, eq, skip, slack_ms
+from harness import FINDING, PIN, PLATFORM, case, check, eq, skip
 from keyfiles import make_identity
 from net import Peer
 from s14_connect import connect_to, new_conn
@@ -317,7 +317,11 @@ def t315():
     """Clients are served in parallel."""
     P = lib.proto()
     ident = make_identity()
-    with servers.Server(ident.hex, "sleep", ms=200) as srv:
+    # The bound is three quarters of what serving the clients one by one takes. A slow host stretches the
+    # handlers' sleep, and the bound with it: a bound stretched alone would let a server that serves in turn
+    # pass there.
+    nap = int(200 * max(1.0, harness.SLACK))
+    with servers.Server(ident.hex, "sleep", ms=nap) as srv:
         def client():
             rc, conn = connect_to(P, ident, srv.port)
             eq(rc, 0, "proto_connect")
@@ -327,7 +331,7 @@ def t315():
         workers = [net.Worker(client) for _ in range(20)]
         [w.finish(30) for w in workers]
         took = net.ms_since(t0)
-        check(took < 2000 + slack_ms(2000), "20 clients of 200 ms took %.0f ms: they were served one by one" % took)
+        check(took < 15 * nap, "20 clients of %d ms took %.0f ms: they were served one by one" % (nap, took))
 
 
 @case("T-316", timeout=180)

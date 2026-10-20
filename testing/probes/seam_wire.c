@@ -167,34 +167,49 @@ static void *drain_thread(void *arg) {
     return NULL;
 }
 
-/* T-042: short writes are resumed. */
+/* T-042: short writes are resumed. A line under 4 KiB goes out in one write and a longer one in three
+ * (write_line in wire.c), so each function sends one of each size. */
 static void short_write(void) {
+    static const size_t lens[] = { 3000, 6000 };          /* the line; its body is 500 bytes shorter */
     int sv[2];
     make_pair(sv);
-    char *line = make_line(3000, 'a', 0);
-    char *body = make_line(2500, 'A', 0);
-    size_t want = 3000 + 1 + 4 + 2500 + 1;
+    char *lines[2], *bodies[2];
+    size_t want = 0;
+    for (int i = 0; i < 2; i++) {
+        lines[i] = make_line(lens[i], 'a', 0);
+        bodies[i] = make_line(lens[i] - 500, 'A', 0);
+        want += lens[i] + 1 + 4 + (lens[i] - 500) + 1;
+    }
     /* Read while the writing goes on: a send of a few bytes costs a whole buffer of the socket's budget
      * on Linux (each one is accounted at its size plus the kernel's overhead), so a thousand of them
      * fill a socketpair that nobody reads and the writer waits for ever. */
     struct drain d = { sv[1], malloc(want + 8), want + 8, 0, 0 };
     if (!d.buf || pthread_create(&d.tid, NULL, drain_thread, &d) != 0) FAILF("cannot start the reader");
     send_mode = 1;
-    CHECK_EQ(proto_send_line(sv[0], line), PROTO_OK);
-    CHECK(send_calls > 3000 / 7);
-    unsigned long first = send_calls;
-    CHECK_EQ(proto_send_prefixed(sv[0], "PUT ", body, 2500), PROTO_OK);
-    CHECK(send_calls - first > 2500 / 7);
+    for (int i = 0; i < 2; i++) {
+        unsigned long before = send_calls;
+        CHECK_EQ(proto_send_line(sv[0], lines[i]), PROTO_OK);
+        CHECK(send_calls - before > lens[i] / 7);
+        before = send_calls;
+        CHECK_EQ(proto_send_prefixed(sv[0], "PUT ", bodies[i], lens[i] - 500), PROTO_OK);
+        CHECK(send_calls - before > (lens[i] - 500) / 7);
+    }
     send_mode = 0;
     close(sv[0]);                                   /* the reader sees the end of the stream */
     pthread_join(d.tid, NULL);
 
-    char *got = d.buf;
     CHECK_EQ(d.have, want);
-    CHECK(memcmp(got, line, 3000) == 0 && got[3000] == '\n');
-    CHECK(memcmp(got + 3001, "PUT ", 4) == 0);
-    CHECK(memcmp(got + 3005, body, 2500) == 0 && got[5505] == '\n');
-    free(got); free(line); free(body);
+    const char *got = d.buf;
+    for (int i = 0; i < 2; i++) {
+        size_t n = lens[i], b = lens[i] - 500;
+        CHECK(memcmp(got, lines[i], n) == 0 && got[n] == '\n');
+        got += n + 1;
+        CHECK(memcmp(got, "PUT ", 4) == 0 && memcmp(got + 4, bodies[i], b) == 0 && got[4 + b] == '\n');
+        got += 4 + b + 1;
+        free(lines[i]);
+        free(bodies[i]);
+    }
+    free(d.buf);
     close(sv[1]);
 }
 

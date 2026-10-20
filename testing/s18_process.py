@@ -26,7 +26,6 @@ def libc_signal():
     return c
 
 
-
 def privileged_port_restricted():
     """True when ordinary users cannot bind port 1 (ip_unprivileged_port_start > 1)."""
     try:
@@ -34,6 +33,7 @@ def privileged_port_restricted():
             return int(f.read()) > 1
     except (OSError, ValueError):
         return False
+
 
 @case("T-348", FINDING)
 def t348():

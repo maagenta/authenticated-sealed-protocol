@@ -342,9 +342,11 @@ def t403():
     skip("this compiler cannot build with fortification: " + last[-200:])
 
 
-@case("T-404", tags=("fuzz",), timeout=600)
+@case("T-404", timeout=600)
 def t404():
     """The fuzz corpora are kept, and grow with every fix."""
+    # No fuzz tag: replaying the corpora takes a moment, and it runs on every run, so that a defect a
+    # kept input found cannot come back between two fuzzing jobs.
     for name, target in sorted(fuzzing.TARGETS.items()):
         n = fuzzing.replay(target)
         check(n >= 3, "the corpus of %s holds only %d inputs" % (name, n))
@@ -450,7 +452,8 @@ def mutant_tree(source, old, new):
 @case("T-406", tags=("slow",), timeout=3000)
 def t406():
     """The boundary tests are sharp."""
-    rc, out = run_ids(MUTANTS[0][3])
+    # Every test a mutant is judged by must pass first: one that fails anyway would kill its mutant for nothing.
+    rc, out = run_ids(sorted(set(t for _, _, _, ids in MUTANTS for t in ids)))
     check(rc == 0, "the tests that must kill the mutants do not pass on the unaltered code: " + out[-300:])
     survivors = []
     for source, old, new, ids in MUTANTS:

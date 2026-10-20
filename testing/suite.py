@@ -67,7 +67,8 @@ def run_suite(label, extra=(), scenario="all", sanitize=None, leaks=False, timeo
     rc, out, err = lib.run_exe(exe, args, timeout=timeout, env=env)
     text = err.decode("utf-8", "replace")
     if rc != 0:
-        fail("the %s build of the suite failed (%d): %s" % (label, rc, text.strip()[-700:] or out.decode()[-300:]))
+        fail("the %s build of the suite failed (%d): %s" % (label, rc, text.strip()[-700:]
+                                                             or out.decode("utf-8", "replace")[-300:]))
     if sanitize and ("ERROR: AddressSanitizer" in text or "runtime error" in text
                      or "WARNING: ThreadSanitizer" in text or "LeakSanitizer" in text):
         fail("a sanitizer reported in the %s build: %s" % (label, text.strip()[-700:]))

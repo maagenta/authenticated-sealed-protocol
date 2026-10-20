@@ -273,15 +273,25 @@ def sanitizer_works(kind):
         rc, _ = run([exe], timeout=30, env=dict(os.environ, **san_env(kind)))
         ok = rc == 0
     if ok and kind == "tsan":
+        # The thread's access comes second, after a flag read and written with relaxed atomics, which TSan
+        # does not count as synchronization. Left to the scheduler, the two accesses came in either order,
+        # and with the main thread's second the TSan of GCC 16 missed the race in one run in seven: TSan was
+        # judged absent at random, and the tests that need it skipped, or ran without it.
         racy = os.path.join(d, "race.c")
         with open(racy, "w") as f:
             f.write("#include <pthread.h>\n"
-                    "int x;\n"
-                    "static void *bump(void *a) { x++; return a; }\n"
+                    "int x, go;\n"
+                    "static void *bump(void *a) {\n"
+                    "    while (!__atomic_load_n(&go, __ATOMIC_RELAXED))\n"
+                    "        ;\n"
+                    "    x++;\n"
+                    "    return a;\n"
+                    "}\n"
                     "int main(void) {\n"
                     "    pthread_t t;\n"
                     "    if (pthread_create(&t, 0, bump, 0) != 0) return 1;\n"
                     "    x++;\n"
+                    "    __atomic_store_n(&go, 1, __ATOMIC_RELAXED);\n"
                     "    pthread_join(t, 0);\n"
                     "    return 0;\n"
                     "}\n")

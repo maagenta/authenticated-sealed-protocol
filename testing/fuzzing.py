@@ -235,7 +235,9 @@ class LineReaders(Target):
             return
         bufsz = r.randint(1, 80)
         if mode == "timeout":
-            ms = r.choice((0, 20, 30, 50))
+            # Every byte is in the socket already, so a deadline above 0 must never fire; a slow host
+            # gets the slack every other timing window gets.
+            ms = int(r.choice((0, 20, 30, 50)) * max(1.0, harness.SLACK))
             rc, raw = self.P.recv_line_timeout_raw(fd, ms, bufsz)
             if ms == 0:
                 check(rc == -605, "ms == 0 gave %d" % rc)
@@ -417,6 +419,10 @@ def fuzz(name, seconds=None):
                 with open(message, "w") as f:
                     f.write(str(e))
                 os._exit(1)
+            except Exception as e:                    # the target itself is wrong: say so, not "no end"
+                with open(message, "w") as f:
+                    f.write("the target raised %s: %s" % (type(e).__name__, e))
+                os._exit(2)
             n += 1
         with open(last + ".count", "w") as f:
             f.write(str(n))
@@ -427,14 +433,25 @@ def fuzz(name, seconds=None):
         how, code = harness.in_child(batch, timeout=60)
         if how == "exit" and code == 0:
             try:
-                total += int(open(last + ".count").read())
+                with open(last + ".count") as f:
+                    total += int(f.read())
             except (OSError, ValueError):
                 pass
             continue
-        data = open(last, "rb").read() if os.path.exists(last) else b""
+        data = b""
+        if os.path.exists(last):
+            with open(last, "rb") as f:
+                data = f.read()
         kept = keep_crash(target, data)
-        why = open(message).read() if how == "exit" and os.path.exists(message) else \
-            ("killed by signal %d" % code if how == "signal" else "no end within 60 s")
+        if how == "exit" and os.path.exists(message):
+            with open(message) as f:
+                why = f.read()
+        elif how == "exit":
+            why = "the batch exited %d" % code
+        elif how == "signal":
+            why = "killed by signal %d" % code
+        else:
+            why = "no end within 60 s"
         raise Fail("%s: %s; the input is kept as %s (seed %d, batch %d)" % (name, why, os.path.relpath(kept, harness.ROOT), seed0, batch_no))
     harness.note("%s: %d inputs run" % (name, total))
     return total

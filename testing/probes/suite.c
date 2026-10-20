@@ -169,7 +169,9 @@ static void make_keys(proto_keys_t *k) {
 }
 
 static void keys(void) {
-    char dir[] = "/tmp/proto-suite-XXXXXX";
+    /* In the current directory, which the harness makes for each test and removes after it: the files
+     * hold secret keys, written with the default mode, and a directory under /tmp would outlive the run. */
+    char dir[] = "proto-suite-XXXXXX";
     if (!mkdtemp(dir)) FAILF("mkdtemp");
     char a[600], e[600], pub[600], p2[600];
     snprintf(a, sizeof a, "%s/auth.key", dir);
@@ -216,6 +218,10 @@ static void keys(void) {
     CHECK(!memcmp(&got, zero, sizeof got));
     CHECK_EQ(proto_load_keys(e, a, &got), PROTO_E_KEY_SIZE);
     CHECK_EQ(proto_load_keys(a, e, NULL), PROTO_E_PARAM);
+
+    const char *made[] = { a, e, pub, p2 };
+    for (size_t i = 0; i < sizeof made / sizeof made[0]; i++) unlink(made[i]);
+    rmdir(dir);
 }
 
 /* ------------------------------------------------------------------- seal */

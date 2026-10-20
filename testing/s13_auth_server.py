@@ -167,7 +167,7 @@ def t237():
 
 @case("T-238")
 def t238():
-    """A line that does not begin with AUTH is refused."""
+    """A line that does not begin with "AUTH " is refused."""
     ident = make_identity()
     for line in (b"auth pk sig", b"HELLO", b"", b"AUTHX pk sig"):
         got, reply, _ = serve_one(after_challenge(line), ident.hex)

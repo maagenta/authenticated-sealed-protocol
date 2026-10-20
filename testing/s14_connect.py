@@ -1,6 +1,7 @@
 """XVI. proto_connect (T-254 to T-281)."""
 
 import ctypes
+import fcntl
 import os
 import signal
 import socket
@@ -341,21 +342,27 @@ def t274():
         os.write(w, b"x")
         eq(os.read(0, 1), b"x", "the pipe on stdin still works")
         P.close(conn)
-        # a pipe at fd 5, in conn->fd
-        os.dup2(r, 5)
+        # a pipe at fd 5 or above, in conn->fd: the lowest free number from 5, since a dup2 to 5 would
+        # close whatever the case holds there (the write end of this very pipe, or the harness's report pipe)
+        fd = fcntl.fcntl(r, fcntl.F_DUPFD, 5)
         conn = lib.Conn()
         conn.keys = keys
-        conn.fd = 5
-        eq(P.connect(conn, "127.0.0.1", srv.port), 0, "a pipe at fd 5 in conn->fd")
-        os.fstat(5)
-        check(conn.fd != 5, "the connection took the pipe's descriptor")
+        conn.fd = fd
+        eq(P.connect(conn, "127.0.0.1", srv.port), 0, "a pipe at fd %d in conn->fd" % fd)
+        os.fstat(fd)
+        check(conn.fd != fd, "the connection took the pipe's descriptor")
         P.close(conn)
 
 
 def watched_socket_on(fd):
-    """Put one end of a socketpair on descriptor fd; returns (reader thread, the other end)."""
+    """Put one end of a socketpair on descriptor 0, or on the lowest free one from fd: a dup2 to a
+    number other than stdin's would close whatever is open there. Returns (reader thread, what it
+    read, the descriptor)."""
     x, y = net.sockpair()
-    os.dup2(x.fileno(), fd)
+    if fd == 0:
+        os.dup2(x.fileno(), 0)
+    else:
+        fd = fcntl.fcntl(x.fileno(), fcntl.F_DUPFD, fd)
     x.close()
     peer = net.Peer(y)
     seen = {}
@@ -363,7 +370,7 @@ def watched_socket_on(fd):
     def read_all():
         seen["data"] = peer.recv_all(10)
         return seen["data"]
-    return net.Worker(read_all), seen
+    return net.Worker(read_all), seen, fd
 
 
 @case("T-275", PIN)
@@ -373,7 +380,7 @@ def t275():
     ident = make_identity()
     with servers.Server(ident.hex, "ok") as srv:
         rc, keys = P.load_keys(ident.auth_key, ident.enc_key)
-        reader, seen = watched_socket_on(0)
+        reader, seen, _ = watched_socket_on(0)
         conn = lib.Conn()
         conn.keys = keys
         eq(P.connect(conn, "127.0.0.1", srv.port), 0, "a {0} conn with a socket as stdin")
@@ -389,10 +396,10 @@ def t276():
     ident = make_identity()
     with servers.Server(ident.hex, "ok") as srv:
         rc, keys = P.load_keys(ident.auth_key, ident.enc_key)
-        reader, seen = watched_socket_on(7)
+        reader, seen, fd = watched_socket_on(7)
         conn = lib.Conn()
         conn.keys = keys
-        conn.fd = 7
+        conn.fd = fd
         eq(P.connect(conn, "127.0.0.1", srv.port), 0, "proto_connect with conn->fd on an application's socket")
         eq(reader.finish(15), b"QUIT\n", "what the application's socket received before it was closed")
         P.close(conn)

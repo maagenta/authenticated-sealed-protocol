@@ -302,7 +302,7 @@ def t201():
     runprobe.must_pass("seam_crypto", ["unseal_alloc"], seams=runprobe.CRYPTO_SEAMS)
 
 
-@case("T-202")
+@case("T-202", tags=("seam",))
 def t202():
     """A failed open returns nothing and leaks nothing."""
     runprobe.must_pass("seam_crypto", ["unseal_failures"], seams=runprobe.CRYPTO_SEAMS)
